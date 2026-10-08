@@ -38,13 +38,13 @@ Updates show up in the catalog automatically whenever a new release is published
 
 ## Publishing a release
 
-GitHub builds everything for you, so you don't need .NET installed. To publish:
+GitHub builds everything for you, so you don't need .NET installed. To ship an update:
 
-1. On GitHub, go to **Releases → Draft a new release**.
-2. Create a tag such as `v1.0.0`.
-3. Publish the release.
+1. Open the `VERSION` file on GitHub and edit it.
+2. Raise the number, for example from `1.0.0.0` to `1.0.1.0`.
+3. Commit the change.
 
-The workflow builds the plugin, attaches the zip, and updates `manifest.json`. Jellyfin then sees the new version.
+The workflow builds the plugin, publishes a release with the zip, and updates `manifest.json`. Jellyfin then offers the update in its catalog.
 
 To build locally instead, install the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) and run:
 

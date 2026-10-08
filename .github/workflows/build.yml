@@ -1,13 +1,13 @@
 name: Build plugin
 
-# Every push builds the plugin and keeps the zip as a downloadable artifact.
-# Pushing a tag like v1.0.0 also publishes a GitHub release and updates
-# manifest.json, which is what Jellyfin reads to install and update the plugin.
+# Every push builds the plugin. When the number in VERSION has no release yet,
+# a push to main also publishes a GitHub release and updates manifest.json,
+# which is what Jellyfin reads to install and update the plugin.
+# To ship an update: change VERSION (e.g. 1.0.0.0 -> 1.0.1.0) and push.
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -24,17 +24,19 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Work out version
+      - name: Read version
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            V="${GITHUB_REF#refs/tags/v}"
+          V="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]] && ! gh release view "v$V" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
           else
-            V="1.0.0"
+            echo "release=false" >> "$GITHUB_OUTPUT"
           fi
-          # Jellyfin uses four-part versions
-          IFS='.' read -r a b c d <<< "$V"
-          echo "version=${a:-1}.${b:-0}.${c:-0}.${d:-0}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: >
@@ -62,24 +64,25 @@ jobs:
           path: dist/
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Book Reader ${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: ${{ steps.pkg.outputs.zip }}
           generate_release_notes: true
 
       - name: Update Jellyfin manifest
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.ver.outputs.release == 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           MD5: ${{ steps.pkg.outputs.md5 }}
-          URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.pkg.outputs.zip }}
+          URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/${{ steps.pkg.outputs.zip }}
         run: |
-          git fetch origin main
-          git checkout main
           python3 .github/update_manifest.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add manifest.json
-          git commit -m "Release ${{ github.ref_name }}" || exit 0
-          git push origin main
+          git commit -m "Release ${{ steps.ver.outputs.tag }} [skip ci]" || exit 0
+          git push origin HEAD:main
