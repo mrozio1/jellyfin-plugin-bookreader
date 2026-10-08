@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Book Reader</title>
+</head>
+<body>
+<div id="BookReaderConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="BookReaderConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Book Reader</h2>
+                    <p class="fieldDescription">These settings apply to everyone on this server. If you allow it, each person can still adjust their own reading style from inside the reader.</p>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Reading style defaults</h3>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="DefaultTheme">Page colour</label>
+                        <select is="emby-select" id="DefaultTheme" class="emby-select-withcolor emby-select">
+                            <option value="light">Paper (light)</option>
+                            <option value="sepia">Sepia</option>
+                            <option value="dark">Slate (dark)</option>
+                            <option value="black">Night (pure black, best for OLED screens)</option>
+                        </select>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="AccentColor">Accent colour</label>
+                        <input is="emby-input" type="text" id="AccentColor" pattern="^#[0-9a-fA-F]{3,8}$" />
+                        <div class="fieldDescription">Hex colour for the progress ribbon, links and buttons. Jellyfin blue is #00a4dc.</div>
+                    </div>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="DefaultFont">Typeface</label>
+                        <select is="emby-select" id="DefaultFont" class="emby-select-withcolor emby-select">
+                            <option value="serif">Literata (serif, designed for screen reading)</option>
+                            <option value="sans">Sans-serif (device font)</option>
+                            <option value="dyslexic">Atkinson Hyperlegible (high legibility)</option>
+                            <option value="publisher">Book's own font</option>
+                        </select>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DefaultFontSize">Text size (%)</label>
+                        <input is="emby-input" type="number" id="DefaultFontSize" min="70" max="220" step="10" />
+                    </div>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="DefaultLineHeight">Line spacing</label>
+                        <select is="emby-select" id="DefaultLineHeight" class="emby-select-withcolor emby-select">
+                            <option value="1.35">Tight</option>
+                            <option value="1.6">Normal</option>
+                            <option value="1.9">Airy</option>
+                        </select>
+                    </div>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="DefaultMargins">Margins</label>
+                        <select is="emby-select" id="DefaultMargins" class="emby-select-withcolor emby-select">
+                            <option value="narrow">Narrow</option>
+                            <option value="normal">Normal</option>
+                            <option value="wide">Wide</option>
+                        </select>
+                    </div>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="DefaultLayout">Page turning (EPUB and PDF)</label>
+                        <select is="emby-select" id="DefaultLayout" class="emby-select-withcolor emby-select">
+                            <option value="paginated">Pages</option>
+                            <option value="scrolled">Continuous scroll</option>
+                        </select>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="AllowUserOverrides" type="checkbox" is="emby-checkbox" />
+                            <span>Let users change their own reading style</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">When off, everyone reads with the defaults above.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Comics</h3>
+
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="ComicDirection">Reading direction</label>
+                        <select is="emby-select" id="ComicDirection" class="emby-select-withcolor emby-select">
+                            <option value="ltr">Left to right (Western comics)</option>
+                            <option value="rtl">Right to left (manga)</option>
+                            <option value="vertical">Vertical scroll (webtoons)</option>
+                        </select>
+                    </div>
+
+                    <div class="checkboxContainer">
+                        <label class="emby-checkbox-label">
+                            <input id="ComicTwoPageSpread" type="checkbox" is="emby-checkbox" />
+                            <span>Show two pages side by side on wide screens</span>
+                        </label>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PrefetchPages">Pages to load ahead</label>
+                        <input is="emby-input" type="number" id="PrefetchPages" min="1" max="10" />
+                        <div class="fieldDescription">Higher makes page turns smoother on slow connections but uses more data. 3 suits most setups.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Jellyfin integration</h3>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="InjectIntoWebClient" type="checkbox" is="emby-checkbox" />
+                            <span>Add a Read button to book pages</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Edits the web client's index.html. Re-applied on each server start, so it survives Jellyfin updates.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="ReplaceBuiltInReader" type="checkbox" is="emby-checkbox" />
+                            <span>Open books in this reader when users press Play</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Replaces Jellyfin's built-in book viewer.</div>
+                    </div>
+
+                    <p id="IntegrationResult" class="fieldDescription"></p>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Extra formats</h3>
+                    <p class="fieldDescription">EPUB, PDF and comics (CBZ, CBR, CB7, CBT) work with nothing extra installed. MOBI, AZW3, FB2, DOCX and similar formats are converted to EPUB the first time they're opened, which needs Calibre. DjVu needs DjVuLibre.</p>
+                    <p id="ToolStatus" class="fieldDescription">Checking for converters…</p>
+
+                    <div class="checkboxContainer">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableConversion" type="checkbox" is="emby-checkbox" />
+                            <span>Convert extra formats automatically</span>
+                        </label>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="CalibreConvertPath">Path to Calibre's ebook-convert</label>
+                        <input is="emby-input" type="text" id="CalibreConvertPath" />
+                        <div class="fieldDescription">Leave blank to find it automatically.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DdjvuPath">Path to ddjvu</label>
+                        <input is="emby-input" type="text" id="DdjvuPath" />
+                        <div class="fieldDescription">Leave blank to find it automatically.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ConversionTimeoutMinutes">Conversion time limit (minutes)</label>
+                        <input is="emby-input" type="number" id="ConversionTimeoutMinutes" min="1" max="60" />
+                    </div>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = '007c7a3d-4922-4238-bc94-f20f5cb37996';
+            var page = document.querySelector('#BookReaderConfigPage');
+            var form = document.querySelector('#BookReaderConfigForm');
+            var text = ['DefaultTheme', 'AccentColor', 'DefaultFont', 'DefaultMargins', 'DefaultLayout', 'ComicDirection', 'CalibreConvertPath', 'DdjvuPath'];
+            var ints = ['DefaultFontSize', 'PrefetchPages', 'ConversionTimeoutMinutes'];
+            var floats = ['DefaultLineHeight'];
+            var bools = ['AllowUserOverrides', 'ComicTwoPageSpread', 'InjectIntoWebClient', 'ReplaceBuiltInReader', 'EnableConversion'];
+
+            function el(id) { return page.querySelector('#' + id); }
+
+            function showTools() {
+                ApiClient.getJSON(ApiClient.getUrl('BookReader/Admin/Status')).then(function (s) {
+                    var calibre = s.calibre ? 'Calibre found at ' + s.calibre + '.' : 'Calibre not found, so MOBI, AZW3 and similar files can\'t be opened yet.';
+                    var djvu = s.ddjvu ? ' DjVuLibre found at ' + s.ddjvu + '.' : ' DjVuLibre not found, so DjVu files can\'t be opened yet.';
+                    el('ToolStatus').textContent = calibre + djvu;
+                }).catch(function () {
+                    el('ToolStatus').textContent = 'Could not check for converters.';
+                });
+            }
+
+            page.addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    text.concat(ints).forEach(function (k) { el(k).value = config[k] == null ? '' : config[k]; });
+                    floats.forEach(function (k) { el(k).value = String(config[k]); });
+                    bools.forEach(function (k) { el(k).checked = !!config[k]; });
+                    Dashboard.hideLoadingMsg();
+                });
+                showTools();
+            });
+
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    text.forEach(function (k) { config[k] = el(k).value.trim(); });
+                    ints.forEach(function (k) { config[k] = parseInt(el(k).value, 10) || config[k]; });
+                    floats.forEach(function (k) { config[k] = parseFloat(el(k).value) || config[k]; });
+                    bools.forEach(function (k) { config[k] = el(k).checked; });
+                    return ApiClient.updatePluginConfiguration(pluginId, config);
+                }).then(function (result) {
+                    Dashboard.processPluginConfigurationUpdateResult(result);
+                    return ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('BookReader/Admin/ApplyWebIntegration'), dataType: 'json' });
+                }).then(function (r) {
+                    el('IntegrationResult').textContent = (r && r.message ? r.message : '') + ' Refresh other open Jellyfin tabs to see the change.';
+                    showTools();
+                }).catch(function () {
+                    Dashboard.hideLoadingMsg();
+                });
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

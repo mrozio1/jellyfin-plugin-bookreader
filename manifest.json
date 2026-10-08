@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "007c7a3d-4922-4238-bc94-f20f5cb37996",
+    "name": "Book Reader",
+    "description": "A fast, good-looking reader for EPUB, PDF, comics (CBZ/CBR/CB7/CBT) and, with Calibre installed, MOBI/AZW3/FB2 and more. Server-wide reading defaults set by the admin, with reading position synced per user.",
+    "overview": "Read your book and comic library inside Jellyfin",
+    "owner": "mrozio1",
+    "category": "General",
+    "imageUrl": "",
+    "versions": []
+  }
+]

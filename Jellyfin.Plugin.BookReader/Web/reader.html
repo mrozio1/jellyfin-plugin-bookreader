@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1e2329">
+  <meta name="referrer" content="same-origin">
+  <title>Book Reader</title>
+  <link rel="preload" href="Assets/fonts/literata-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="Assets/reader.css">
+</head>
+<body>
+  <div id="app" class="is-loading chrome-visible">
+
+    <!-- Top bar -->
+    <header class="topbar" id="topbar">
+      <button class="icon-btn" id="btn-close" aria-label="Close book" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="titles">
+        <div class="book-title" id="book-title">Opening…</div>
+        <div class="chapter-title" id="chapter-title"></div>
+      </div>
+      <button class="icon-btn" id="btn-toc" aria-label="Contents" title="Contents (T)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-settings" aria-label="Reading settings" title="Reading settings (S)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4M12 7h8M4 17h10M18 17h2"/><circle cx="10" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-fullscreen" aria-label="Full screen" title="Full screen (F)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+    </header>
+
+    <!-- Reading surface -->
+    <main class="stage" id="stage" tabindex="-1">
+      <div class="viewer" id="viewer" aria-live="polite"></div>
+      <button class="turn-zone prev" id="zone-prev" aria-label="Previous page" tabindex="-1"></button>
+      <button class="turn-zone next" id="zone-next" aria-label="Next page" tabindex="-1"></button>
+    </main>
+
+    <!-- Bottom bar: the ribbon scrubber -->
+    <footer class="bottombar" id="bottombar">
+      <div class="scrubber" id="scrubber">
+        <div class="track" id="track">
+          <div class="fill" id="fill"></div>
+          <div class="ticks" id="ticks"></div>
+          <div class="ribbon" id="ribbon" aria-hidden="true"></div>
+        </div>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position in book">
+      </div>
+      <div class="readout">
+        <span id="pos-label"></span>
+        <span id="pct-label"></span>
+      </div>
+    </footer>
+
+    <!-- Loading / message overlay -->
+    <div class="veil" id="veil">
+      <div class="veil-card">
+        <div class="spine" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p id="veil-text">Opening your book</p>
+        <div class="meter" id="meter" hidden><div id="meter-fill"></div></div>
+        <button class="text-btn" id="veil-action" hidden>Go back</button>
+      </div>
+    </div>
+
+    <!-- Contents drawer -->
+    <aside class="drawer" id="toc" aria-label="Contents" hidden>
+      <div class="drawer-head">
+        <h2>Contents</h2>
+        <button class="icon-btn" data-close aria-label="Close contents">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <ol class="toc-list" id="toc-list"></ol>
+    </aside>
+
+    <!-- Settings sheet -->
+    <aside class="sheet" id="settings" aria-label="Reading settings" hidden>
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <div class="drawer-head">
+        <h2>Reading settings</h2>
+        <button class="icon-btn" data-close aria-label="Close settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <p class="locked-note" id="locked-note" hidden>Your server admin has set the reading style for everyone.</p>
+
+      <fieldset class="field">
+        <legend>Page colour</legend>
+        <div class="swatches" role="radiogroup" data-setting="theme">
+          <button role="radio" data-value="light" class="swatch sw-light"><span>Paper</span></button>
+          <button role="radio" data-value="sepia" class="swatch sw-sepia"><span>Sepia</span></button>
+          <button role="radio" data-value="dark" class="swatch sw-dark"><span>Slate</span></button>
+          <button role="radio" data-value="black" class="swatch sw-black"><span>Night</span></button>
+        </div>
+      </fieldset>
+
+      <fieldset class="field text-only">
+        <legend>Typeface</legend>
+        <div class="segmented fonts" role="radiogroup" data-setting="font">
+          <button role="radio" data-value="serif" class="f-serif">Literata</button>
+          <button role="radio" data-value="sans" class="f-sans">Sans</button>
+          <button role="radio" data-value="dyslexic" class="f-hyper">Atkinson</button>
+          <button role="radio" data-value="publisher" class="f-pub">Book's own</button>
+        </div>
+      </fieldset>
+
+      <div class="field text-only">
+        <span class="field-label" id="size-label">Text size</span>
+        <div class="stepper" aria-labelledby="size-label">
+          <button id="size-down" aria-label="Smaller text"><span class="a-small">A</span></button>
+          <output id="size-out">100%</output>
+          <button id="size-up" aria-label="Larger text"><span class="a-large">A</span></button>
+        </div>
+      </div>
+
+      <fieldset class="field text-only">
+        <legend>Line spacing</legend>
+        <div class="segmented" role="radiogroup" data-setting="lineHeight">
+          <button role="radio" data-value="1.35">Tight</button>
+          <button role="radio" data-value="1.6">Normal</button>
+          <button role="radio" data-value="1.9">Airy</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="field text-only">
+        <legend>Margins</legend>
+        <div class="segmented" role="radiogroup" data-setting="margins">
+          <button role="radio" data-value="narrow">Narrow</button>
+          <button role="radio" data-value="normal">Normal</button>
+          <button role="radio" data-value="wide">Wide</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="field not-comic">
+        <legend>Page turning</legend>
+        <div class="segmented" role="radiogroup" data-setting="layout">
+          <button role="radio" data-value="paginated">Pages</button>
+          <button role="radio" data-value="scrolled">Scroll</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="field comic-only">
+        <legend>Reading direction</legend>
+        <div class="segmented" role="radiogroup" data-setting="comicDirection">
+          <button role="radio" data-value="ltr">Left to right</button>
+          <button role="radio" data-value="rtl">Right to left</button>
+          <button role="radio" data-value="vertical">Vertical</button>
+        </div>
+      </fieldset>
+
+      <label class="field toggle comic-only">
+        <span>Two pages side by side on wide screens</span>
+        <input type="checkbox" id="spread-toggle">
+      </label>
+    </aside>
+
+    <div class="scrim" id="scrim" hidden></div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+
+  <script type="module" src="Assets/reader.js"></script>
+</body>
+</html>
