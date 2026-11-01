@@ -10,7 +10,7 @@ public class PluginConfiguration : BasePluginConfiguration
 {
     // ---- Look & feel ----
     /// <summary>light | sepia | dark | black</summary>
-    public string DefaultTheme { get; set; } = "dark";
+    public string DefaultTheme { get; set; } = "sepia";
 
     /// <summary>Hex colour used for buttons, progress bar and highlights.</summary>
     public string AccentColor { get; set; } = "#00a4dc";

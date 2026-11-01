@@ -22,7 +22,9 @@ import urllib.request
 BASE = os.environ.get("JF_URL", "http://127.0.0.1:8096")
 BOOKS_DIR = sys.argv[1]
 CLIENT = 'MediaBrowser Client="perf", Device="ci", DeviceId="perf-ci", Version="1.0"'
-RESULTS = {"http": {}, "browser": {}, "errors": []}
+RESULTS = {"http": {}, "browser": {}, "features": {}, "errors": []}
+SHOTS = os.path.abspath("shots")
+os.makedirs(SHOTS, exist_ok=True)
 
 
 def call(method, path, body=None, token=None, headers=None, timeout=600):
@@ -166,7 +168,7 @@ def throttle(on):
         subprocess.run(["sudo", "tc", "qdisc", "add", "dev", "lo", "root", "netem", "delay", "40ms", "rate", "25mbit"], check=True)
 
 
-async def open_book(browser, token, item, turns=6):
+async def open_book(browser, token, item, turns=6, shot=None):
     ctx = await browser.new_context(viewport={"width": 412, "height": 915}, device_scale_factor=2)
     page = await ctx.new_page()
     errors = []
@@ -197,6 +199,8 @@ async def open_book(browser, token, item, turns=6):
                 result["stuck_on"] = await page.evaluate("document.getElementById('veil-text')?.textContent")
                 break
             if attempt == "first_open":
+                if shot:
+                    await page.screenshot(path=os.path.join(SHOTS, shot))
                 times = []
                 for _ in range(turns):
                     before = await page.evaluate("document.getElementById('pos-label').textContent")
@@ -223,12 +227,82 @@ async def browser_tests(token, books):
             throttle(net != "home_network")
             try:
                 for name, item in books.items():
-                    r = await open_book(browser, token, item)
+                    shot = f"phone-{os.path.splitext(name)[0].replace(' ', '-').lower()}.png" if net == "home_network" else None
+                    r = await open_book(browser, token, item, shot=shot)
                     RESULTS["browser"].setdefault(name, {})[net] = r
                     print(net, name, json.dumps(r))
             finally:
                 throttle(False)
+        await feature_tests(browser, token, books)
         await browser.close()
+
+
+async def ready_page(browser, token, item, viewport, dpr=2):
+    ctx = await browser.new_context(viewport=viewport, device_scale_factor=dpr)
+    page = await ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(f"js: {e}"))
+    await page.goto(f"{BASE}/BookReader/Reader?id={item}#t={token}")
+    await page.wait_for_function(READY_JS, timeout=120000, polling=50)
+    await page.wait_for_timeout(500)
+    return ctx, page, errors
+
+
+async def feature_tests(browser, token, books):
+    """Bookmarks survive a reopen; comic panels are found; desktop layouts render."""
+    f = RESULTS["features"]
+    phone = {"width": 412, "height": 915}
+    epub = next(i for n, i in books.items() if n.endswith(".epub"))
+    panels = next(i for n, i in books.items() if n.startswith("Panel"))
+
+    # Bookmark: add one, close, reopen, and it should still be marked.
+    ctx, page, errors = await ready_page(browser, token, epub, phone)
+    await page.keyboard.press("ArrowRight")
+    await page.wait_for_timeout(800)
+    await page.click("#btn-bookmark")
+    await page.wait_for_function("document.getElementById('btn-bookmark').getAttribute('aria-pressed') === 'true'", timeout=10000)
+    await page.wait_for_timeout(2500)  # let the reading position save too
+    await page.screenshot(path=os.path.join(SHOTS, "phone-bookmarked.png"))
+    await page.click("#btn-toc")
+    await page.wait_for_timeout(600)
+    await page.screenshot(path=os.path.join(SHOTS, "phone-contents.png"))
+    await ctx.close()
+    ctx, page, errors2 = await ready_page(browser, token, epub, phone)
+    await page.wait_for_timeout(1500)
+    f["bookmark_kept_after_reopen"] = await page.get_attribute("#btn-bookmark", "aria-pressed") == "true"
+    f["bookmark_list_entries"] = await page.evaluate("document.querySelectorAll('#bookmark-list li').length")
+    f["epub_errors"] = errors + errors2
+    await ctx.close()
+
+    # Panels: page 1 has 4 panels, page 2 has 3.
+    ctx, page, errors = await ready_page(browser, token, panels, phone)
+    await page.click("#btn-panels")
+    await page.wait_for_function("document.getElementById('app').dataset.panels !== undefined", timeout=15000)
+    await page.wait_for_timeout(600)
+    f["panels_found_page1"] = int(await page.get_attribute("#app", "data-panels"))
+    await page.screenshot(path=os.path.join(SHOTS, "phone-panel-view.png"))
+    for _ in range(f["panels_found_page1"]):
+        await page.keyboard.press("ArrowRight")
+        await page.wait_for_timeout(500)
+    f["panels_found_page2"] = int(await page.get_attribute("#app", "data-panels"))
+    f["label_after_stepping"] = await page.inner_text("#pos-label")
+    await page.click("#btn-panels")
+    await page.click("#btn-toc")
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(SHOTS, "phone-pages-grid.png"))
+    f["panel_errors"] = errors
+    await ctx.close()
+
+    # Desktop: two-page book spread and comic spread.
+    for name, item in books.items():
+        if name.endswith(".epub") or name.endswith(".cbz") and not name.startswith("Panel"):
+            ctx, page, errors = await ready_page(browser, token, item, {"width": 1440, "height": 900}, dpr=1)
+            await page.keyboard.press("ArrowRight")
+            await page.wait_for_timeout(1500)
+            await page.screenshot(path=os.path.join(SHOTS, f"desktop-{os.path.splitext(name)[1][1:]}.png"))
+            f[f"desktop_{name}_errors"] = errors
+            await ctx.close()
+    print("features", json.dumps(f))
 
 
 def summary():
@@ -241,6 +315,7 @@ def summary():
             turns = ", ".join("—" if x is None else str(x) for x in r.get("page_turn_ms", []))
             probs = "; ".join(r.get("errors", [])) + (f" stuck on: {r['stuck_on']}" if r.get("stuck_on") else "")
             lines.append(f"| {name} | {net.replace('_', ' ')} | {fmt(r.get('first_open_ms'))} | {r.get('first_open_mb', '—')} MB | {fmt(r.get('reopen_ms')) if 'reopen_ms' in r else '—'} | {turns} | {probs or 'none'} |")
+    lines += ["", "### Features", "", "```json", json.dumps(RESULTS["features"], indent=1), "```"]
     lines += ["", "### Server", "", "```json", json.dumps(RESULTS["http"], indent=1), "```"]
     return "\n".join(lines)
 

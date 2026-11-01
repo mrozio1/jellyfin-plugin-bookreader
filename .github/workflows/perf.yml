@@ -69,4 +69,6 @@ jobs:
         if: always()
         with:
           name: speed-results
-          path: tests/perf/results.*
+          path: |
+            tests/perf/results.*
+            tests/perf/shots/*.png

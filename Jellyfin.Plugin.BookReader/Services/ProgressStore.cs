@@ -15,6 +15,20 @@ public class ReadingProgress
     public DateTime UpdatedUtc { get; set; }
 }
 
+/// <summary>A saved place in a book.</summary>
+public class Bookmark
+{
+    /// <summary>EPUB CFI, PDF page number, or comic page index, as a string.</summary>
+    public string Location { get; set; } = string.Empty;
+
+    /// <summary>What to show in the list, e.g. the chapter name.</summary>
+    public string Label { get; set; } = string.Empty;
+
+    public double Percent { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+}
+
 /// <summary>Per-user reading settings (only used when the admin allows overrides).</summary>
 public class UserReaderSettings
 {
@@ -32,6 +46,7 @@ internal class UserFile
 {
     public Dictionary<string, ReadingProgress> Progress { get; set; } = new();
     public UserReaderSettings Settings { get; set; } = new();
+    public Dictionary<string, List<Bookmark>> Bookmarks { get; set; } = new();
 }
 
 /// <summary>
@@ -60,6 +75,52 @@ public class ProgressStore
     {
         progress.UpdatedUtc = DateTime.UtcNow;
         return MutateAsync(userId, f => f.Progress[itemId.ToString("N")] = progress);
+    }
+
+    public async Task<List<Bookmark>> GetBookmarksAsync(Guid userId, Guid itemId)
+    {
+        var file = await LoadAsync(userId).ConfigureAwait(false);
+        return file.Bookmarks.TryGetValue(itemId.ToString("N"), out var list) ? list : new List<Bookmark>();
+    }
+
+    public async Task<List<Bookmark>> AddBookmarkAsync(Guid userId, Guid itemId, Bookmark bookmark)
+    {
+        bookmark.CreatedUtc = DateTime.UtcNow;
+        List<Bookmark> result = new();
+        await MutateAsync(userId, f =>
+        {
+            var key = itemId.ToString("N");
+            if (!f.Bookmarks.TryGetValue(key, out var list))
+            {
+                list = new List<Bookmark>();
+                f.Bookmarks[key] = list;
+            }
+
+            list.RemoveAll(b => b.Location == bookmark.Location);
+            list.Add(bookmark);
+            list.Sort((a, b) => a.Percent.CompareTo(b.Percent));
+            if (list.Count > 500)
+            {
+                list.RemoveRange(500, list.Count - 500);
+            }
+
+            result = list.ToList();
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    public async Task<List<Bookmark>> RemoveBookmarkAsync(Guid userId, Guid itemId, string location)
+    {
+        List<Bookmark> result = new();
+        await MutateAsync(userId, f =>
+        {
+            if (f.Bookmarks.TryGetValue(itemId.ToString("N"), out var list))
+            {
+                list.RemoveAll(b => b.Location == location);
+                result = list.ToList();
+            }
+        }).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<UserReaderSettings> GetSettingsAsync(Guid userId)

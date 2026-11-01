@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.BookReader.Services;
 public class PageImageService
 {
     /// <summary>Widths pages are produced at. Requests snap up to one of these so the cache is shared.</summary>
-    private static readonly int[] Widths = { 720, 1080, 1440, 1920, 2560 };
+    private static readonly int[] Widths = { 360, 720, 1080, 1440, 1920, 2560 };
 
     // Don't bother shrinking pages that are already small.
     private const long SmallEnoughBytes = 300_000;

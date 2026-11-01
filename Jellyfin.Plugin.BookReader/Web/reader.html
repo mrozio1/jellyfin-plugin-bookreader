@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-v="__V__">
+<html lang="en" data-theme="sepia" data-v="__V__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1e2329">
+  <meta name="theme-color" content="#2b241d">
   <meta name="referrer" content="same-origin">
   <title>Book Reader</title>
   <link rel="preload" href="Assets/fonts/literata-400-normal.woff2?v=__V__" as="font" type="font/woff2" crossorigin>
@@ -12,19 +12,16 @@
 <body>
   <div id="app" class="is-loading chrome-visible">
 
-    <!-- Top bar -->
-    <header class="topbar" id="topbar">
+    <!-- Above the page, on the desk -->
+    <header class="desk-head" id="topbar">
       <button class="icon-btn" id="btn-close" aria-label="Close book" title="Close (Esc)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
       <div class="titles">
         <div class="book-title" id="book-title">Opening…</div>
-        <div class="chapter-title" id="chapter-title"></div>
+        <div class="book-sub" id="pos-label"></div>
       </div>
-      <button class="icon-btn" id="btn-toc" aria-label="Contents" title="Contents (T)">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>
-      </button>
-      <button class="icon-btn" id="btn-settings" aria-label="Reading settings" title="Reading settings (S)">
+      <button class="icon-btn comic-only" id="btn-comic-settings" aria-label="Reading settings" title="Reading settings (S)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4M12 7h8M4 17h10M18 17h2"/><circle cx="10" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>
       </button>
       <button class="icon-btn" id="btn-fullscreen" aria-label="Full screen" title="Full screen (F)">
@@ -32,28 +29,60 @@
       </button>
     </header>
 
-    <!-- Reading surface -->
+    <!-- The page on the desk -->
     <main class="stage" id="stage" tabindex="-1">
-      <div class="viewer" id="viewer" aria-live="polite"></div>
+      <div class="sheet" id="sheet">
+        <div class="running-head" id="running-head" aria-hidden="true">
+          <span id="rh-book"></span>
+          <span id="chapter-title"></span>
+        </div>
+        <div class="viewer" id="viewer" aria-live="polite"></div>
+        <div class="folio" id="folio" aria-hidden="true"></div>
+      </div>
       <button class="turn-zone prev" id="zone-prev" aria-label="Previous page" tabindex="-1"></button>
       <button class="turn-zone next" id="zone-next" aria-label="Next page" tabindex="-1"></button>
     </main>
 
-    <!-- Bottom bar: the ribbon scrubber -->
-    <footer class="bottombar" id="bottombar">
-      <div class="scrubber" id="scrubber">
-        <div class="track" id="track">
-          <div class="fill" id="fill"></div>
-          <div class="ticks" id="ticks"></div>
-          <div class="ribbon" id="ribbon" aria-hidden="true"></div>
-        </div>
-        <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position in book">
+    <!-- Below the page: turn buttons and ribbon markers tucked under the sheet -->
+    <nav class="desk-foot" id="bottombar" aria-label="Book controls">
+      <button class="round-btn" id="btn-prev" aria-label="Previous page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+
+      <div class="ribbons">
+        <button class="ribbon-btn" id="btn-toc" title="Contents (T)">
+          <span class="ribbon cloth">
+            <svg class="for-book" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h11M8 12h11M8 17h7M4.5 7h.01M4.5 12h.01M4.5 17h.01"/></svg>
+            <svg class="for-comic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+          </span>
+          <span class="ribbon-label" id="toc-label">Contents</span>
+        </button>
+
+        <button class="ribbon-btn bookmark" id="btn-bookmark" aria-pressed="false" title="Bookmark this page (B)">
+          <span class="ribbon">
+            <svg class="when-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <svg class="when-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>
+          </span>
+          <span class="ribbon-label" id="bookmark-label">Bookmark</span>
+        </button>
+
+        <button class="ribbon-btn for-book" id="btn-settings" title="Reading settings (S)">
+          <span class="ribbon cloth short"><span class="aa" aria-hidden="true">A<small>a</small></span></span>
+          <span class="ribbon-label">Type</span>
+        </button>
+
+        <button class="ribbon-btn for-comic" id="btn-panels" aria-pressed="false" title="Panel by panel (P)">
+          <span class="ribbon cloth short">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6"/></svg>
+          </span>
+          <span class="ribbon-label">Panels</span>
+        </button>
       </div>
-      <div class="readout">
-        <span id="pos-label"></span>
-        <span id="pct-label"></span>
-      </div>
-    </footer>
+
+      <button class="round-btn solid" id="btn-next" aria-label="Next page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+    </nav>
 
     <!-- Loading / message overlay -->
     <div class="veil" id="veil">
@@ -65,19 +94,41 @@
       </div>
     </div>
 
-    <!-- Contents drawer -->
-    <aside class="drawer" id="toc" aria-label="Contents" hidden>
+    <!-- Contents (books) / Pages (comics) -->
+    <aside class="drawer" id="toc" aria-labelledby="toc-title" hidden>
       <div class="drawer-head">
-        <h2>Contents</h2>
-        <button class="icon-btn" data-close aria-label="Close contents">
+        <h2 id="toc-title">Contents</h2>
+        <button class="icon-btn" data-close aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <ol class="toc-list" id="toc-list"></ol>
+      <div class="drawer-body">
+        <section class="jump" aria-label="Jump to a position">
+          <div class="scrubber" id="scrubber">
+            <div class="track"><div class="fill" id="fill"></div><div class="ticks" id="ticks"></div><div class="mark" id="ribbon" aria-hidden="true"></div></div>
+            <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position in book">
+          </div>
+          <div class="readout"><span id="seek-label"></span><span id="pct-label"></span></div>
+        </section>
+
+        <section id="bookmarks-section" hidden>
+          <h3>Bookmarks</h3>
+          <ul class="bookmark-list" id="bookmark-list"></ul>
+        </section>
+
+        <section class="for-book" id="chapters-section">
+          <h3 id="chapters-heading" hidden>Chapters</h3>
+          <ol class="toc-list" id="toc-list"></ol>
+        </section>
+
+        <section class="for-comic">
+          <ol class="page-grid" id="page-grid"></ol>
+        </section>
+      </div>
     </aside>
 
-    <!-- Settings sheet -->
-    <aside class="sheet" id="settings" aria-label="Reading settings" hidden>
+    <!-- Reading settings -->
+    <aside class="settings-sheet" id="settings" aria-label="Reading settings" hidden>
       <div class="sheet-grip" aria-hidden="true"></div>
       <div class="drawer-head">
         <h2>Reading settings</h2>

@@ -59,6 +59,28 @@ for name, data in pages:
 subprocess.run(["7z", "a", "-t7z", "-ms=on", "-mx=1", os.path.join(os.path.abspath(OUT), "Big Comic Solid.cb7"), "."], cwd=tmp, check=True, stdout=subprocess.DEVNULL)
 shutil.rmtree(tmp)
 
+# --- A comic with real panel layouts (white gutters), for the panel-by-panel view ---
+def panel_page(n):
+    W, H, g = 1200, 1800, 36
+    im = Image.new("RGB", (W, H), "white")
+    d = ImageDraw.Draw(im)
+    layouts = [
+        [(g, g, W - g, 640), (g, 640 + g, W // 2 - g // 2, 1200), (W // 2 + g // 2, 640 + g, W - g, 1200), (g, 1200 + g, W - g, H - g)],
+        [(g, g, W // 2 - g // 2, 880), (W // 2 + g // 2, g, W - g, 880), (g, 880 + g, W - g, H - g)],
+    ]
+    colours = [(36, 64, 107), (184, 67, 58), (244, 208, 111), (60, 95, 140)]
+    for k, box in enumerate(layouts[n % 2]):
+        d.rectangle(box, fill=colours[k % 4], outline="black", width=8)
+        d.ellipse([box[0] + 40, box[1] + 40, box[0] + 200, box[1] + 200], fill="white", outline="black", width=5)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=88)
+    return buf.getvalue()
+
+
+with zipfile.ZipFile(os.path.join(OUT, "Panel Comic.cbz"), "w", zipfile.ZIP_STORED) as z:
+    for i in range(8):
+        z.writestr(f"page_{i + 1:02d}.jpg", panel_page(i))
+
 # --- Scanned-style PDF ---
 c = canvas.Canvas(os.path.join(OUT, "Big Scanned Manual.pdf"), pagesize=letter)
 for p in range(1, 201):

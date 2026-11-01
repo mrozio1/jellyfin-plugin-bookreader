@@ -393,6 +393,59 @@ public partial class BookReaderController : ControllerBase
     }
 
     // ------------------------------------------------------------------
+    // Bookmarks
+    // ------------------------------------------------------------------
+
+    [HttpGet("Bookmarks/{itemId}")]
+    [Authorize]
+    public async Task<IActionResult> GetBookmarks([FromRoute] Guid itemId)
+    {
+        if (!TryGetUserId(out var uid))
+        {
+            return Unauthorized();
+        }
+
+        Response.Headers[HeaderNames.CacheControl] = "no-store";
+        return Ok(await _progress.GetBookmarksAsync(uid, itemId).ConfigureAwait(false));
+    }
+
+    [HttpPost("Bookmarks/{itemId}")]
+    [Authorize]
+    public async Task<IActionResult> AddBookmark([FromRoute] Guid itemId, [FromBody] Bookmark bookmark)
+    {
+        if (!TryGetUserId(out var uid))
+        {
+            return Unauthorized();
+        }
+
+        var (item, error) = ResolveItem(itemId);
+        if (item is null)
+        {
+            return error!;
+        }
+
+        if (string.IsNullOrEmpty(bookmark.Location) || bookmark.Location.Length > 2048 || bookmark.Label.Length > 300)
+        {
+            return BadRequest();
+        }
+
+        bookmark.Percent = Math.Clamp(bookmark.Percent, 0, 100);
+        return Ok(await _progress.AddBookmarkAsync(uid, itemId, bookmark).ConfigureAwait(false));
+    }
+
+    [HttpDelete("Bookmarks/{itemId}")]
+    [Authorize]
+    public async Task<IActionResult> RemoveBookmark([FromRoute] Guid itemId, [FromQuery] string location)
+    {
+        if (!TryGetUserId(out var uid))
+        {
+            return Unauthorized();
+        }
+
+        return Ok(await _progress.RemoveBookmarkAsync(uid, itemId, location ?? string.Empty).ConfigureAwait(false));
+    }
+
+    // ------------------------------------------------------------------
     // Admin
     // ------------------------------------------------------------------
 

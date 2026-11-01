@@ -29,7 +29,7 @@ const state = {
   engine: null,
   position: { location: '', percent: 0 },
   saveTimer: 0,
-  chromeTimer: 0,
+  bookmarks: [],
 };
 
 function readToken() {
@@ -95,6 +95,7 @@ async function boot() {
   wireUi();
 
   $('book-title').textContent = info.title || 'Untitled';
+  $('rh-book').textContent = info.title || '';
   document.title = `${info.title} — Book Reader`;
 
   // Formats that need converting: wait for the server to prepare them.
@@ -105,6 +106,12 @@ async function boot() {
 
   state.info = info;
   app.classList.add(`mode-${info.kind}`);
+  if (info.kind === 'comic') {
+    $('toc-label').textContent = 'Pages';
+    $('toc-title').textContent = 'Pages';
+    $('btn-toc').title = 'Pages (T)';
+  }
+  loadBookmarks();
   if (!state.config.allowUserOverrides) {
     $('locked-note').hidden = false;
     $('settings').classList.add('locked');
@@ -116,7 +123,6 @@ async function boot() {
   syncSettingsUi();
 
   app.classList.remove('is-loading');
-  scheduleChromeHide(2500);
 }
 
 async function waitForConversion() {
@@ -171,7 +177,7 @@ class EpubEngine {
       flow: scrolled ? 'scrolled' : 'paginated',
       manager: scrolled ? 'continuous' : 'default',
       spread: 'auto',
-      minSpreadWidth: 960,
+      minSpreadWidth: 900,
       allowScriptedContent: false,
     });
 
@@ -207,11 +213,6 @@ class EpubEngine {
         dx < 0 ? this.next() : this.prev();
       }
     }, { passive: true });
-    doc.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('a')) return;
-      if (doc.getSelection && String(doc.getSelection()).length) return;
-      toggleChrome();
-    });
   }
 
   writeStyle(style) {
@@ -239,6 +240,10 @@ class EpubEngine {
       p, li, h1, h2, h3, h4, h5, h6, blockquote, span, div { color: inherit !important; }
       a, a:visited { color: ${accent} !important; }
       img, svg, video { max-width: 100% !important; height: auto; }
+      ${s.font !== 'publisher' ? 'p { text-align: justify; -webkit-hyphens: auto; hyphens: auto; }' : ''}
+      /* Scene breaks set like a printed book */
+      hr { border: 0 !important; height: auto !important; margin: 1.2em 0 !important; text-align: center; overflow: visible; background: none !important; }
+      hr::after { content: "•   •   •"; color: ${cssVar('--muted')}; font-size: .9em; }
       ::selection { background: ${accent}55; }
     `;
   }
@@ -253,29 +258,55 @@ class EpubEngine {
   }
 
   applyMargins() {
-    const pct = { narrow: 0.03, normal: 0.07, wide: 0.13 }[state.settings.margins] ?? 0.07;
-    const w = window.innerWidth;
-    let side = Math.round(w * pct);
-    // Keep comfortable line lengths in scroll mode on wide screens.
-    if (state.settings.layout === 'scrolled') side = Math.max(side, Math.round((w - 760) / 2));
+    // Margins are measured on the sheet of paper, not the window.
+    const sheet = $('sheet');
+    const w = sheet.clientWidth || window.innerWidth;
+    const base = { narrow: 16, normal: 26, wide: 44 }[state.settings.margins] ?? 26;
+    let side = Math.round(base + w * 0.02);
+    // Keep comfortable line lengths in scroll mode on wide sheets.
+    if (state.settings.layout === 'scrolled') side = Math.max(side, Math.round((w - 720) / 2));
     viewer.style.left = `${side}px`;
     viewer.style.right = `${side}px`;
+    // Wide sheets show two pages, with a gutter down the middle.
+    sheet.classList.toggle('two-up', state.settings.layout !== 'scrolled' && w - 2 * side >= 900);
   }
 
   onRelocated(loc) {
     if (!loc?.start) return;
+    this.loc = loc;
     this.cfi = loc.start.cfi;
     const href = (loc.start.href || '').split('#')[0];
     const chapter = [...this.toc].reverse().find((t) => t.href.split('#')[0].endsWith(href) || href.endsWith(t.href.split('#')[0]));
-    $('chapter-title').textContent = chapter?.label || '';
+    this.chapterLabel = chapter?.label || '';
+    $('chapter-title').textContent = this.chapterLabel;
     markTocCurrent(chapter ? this.toc.indexOf(chapter) : -1);
 
     const d = loc.start.displayed;
-    const label = d && state.settings.layout !== 'scrolled' ? `${d.page} of ${d.total} in this chapter` : '';
+    const where = d && state.settings.layout !== 'scrolled' ? `page ${d.page} of ${d.total}` : '';
+    const label = [this.chapterLabel, where].filter(Boolean).join(' · ');
     let fraction = loc.start.percentage;
     if (this.locationsReady) fraction = this.book.locations.percentageFromCfi(this.cfi);
+    // Page number at the foot of the page: one "location" is about one printed page.
+    $('folio').textContent = this.locationsReady
+      ? String(this.book.locations.locationFromCfi(this.cfi) + 1)
+      : (d?.page ? String(d.page) : '');
     updatePosition(fraction ?? 0, label, this.cfi, !this.locationsReady);
   }
+
+  /** True when a bookmark's location is on the page(s) showing now. */
+  isShowing(location) {
+    if (!this.loc?.start || !window.ePub?.CFI) return location === this.cfi;
+    try {
+      const cfi = new window.ePub.CFI();
+      return cfi.compare(location, this.loc.start.cfi) >= 0 && cfi.compare(location, this.loc.end.cfi) <= 0;
+    } catch {
+      return location === this.cfi;
+    }
+  }
+
+  bookmarkLabel() { return this.chapterLabel || state.info.title || 'Bookmark'; }
+
+  goToLocation(location) { this.rendition.display(location); }
 
   async loadLocations() {
     // Measuring a book means reading every chapter, which is slow on phones.
@@ -307,7 +338,7 @@ class EpubEngine {
       } catch { /* skip */ }
     }
     setTicks(marks);
-    if (this.cfi) updatePosition(this.book.locations.percentageFromCfi(this.cfi), $('pos-label').textContent, this.cfi);
+    if (this.loc) this.onRelocated(this.loc);
   }
 
   next() { this.rendition?.next(); }
@@ -441,25 +472,31 @@ class PdfEngine {
   async showPage(n) {
     this.page = n;
     this.report();
-    const box = viewer.getBoundingClientRect();
+    const { w: maxW, h: maxH } = pageArea();
     const slot = document.createElement('div');
     slot.className = 'page-slot placeholder';
-    const cssWidth = Math.min(box.width, (box.height - 16) / this.aspect);
+    const cssWidth = Math.min(maxW, maxH / this.aspect);
     slot.style.width = `${Math.floor(cssWidth)}px`;
     slot.style.height = `${Math.floor(cssWidth * this.aspect)}px`;
-    this.wrap.replaceChildren(slot);
-    const canvas = await this.renderToCanvas(n, box.width, box.height - 16);
+    this.wrap.replaceChildren(paperSpread([slot]));
+    const canvas = await this.renderToCanvas(n, maxW, maxH);
     if (this.page !== n || !canvas) return;
     slot.classList.remove('placeholder');
     slot.style.width = canvas.style.width;
     slot.style.height = canvas.style.height;
     slot.replaceChildren(canvas);
     // Get the neighbours ready so turning feels instant.
-    const h = box.height - 16;
-    if (n < this.count) this.renderToCanvas(n + 1, box.width, h);
-    if (n > 1) this.renderToCanvas(n - 1, box.width, h);
+    if (n < this.count) this.renderToCanvas(n + 1, maxW, maxH);
+    if (n > 1) this.renderToCanvas(n - 1, maxW, maxH);
     if (n + 2 <= this.count) this.doc.getPage(n + 2).catch(() => {}); // fetch its data only
   }
+
+  isShowing(location) { return Number(location) === this.page; }
+  bookmarkLabel() {
+    const chapter = this.outline ? [...this.outline].reverse().find((o) => o.page <= this.page) : null;
+    return chapter ? `${chapter.label}, page ${this.page}` : `Page ${this.page}`;
+  }
+  goToLocation(location) { this.goTo(parseInt(location, 10) || 1); }
 
   /**
    * Renders a page once and reuses it. Keeps the promise, so asking again for a
@@ -575,7 +612,8 @@ class PdfEngine {
     const chapter = this.outline ? [...this.outline].reverse().find((o) => o.page <= this.page) : null;
     $('chapter-title').textContent = chapter?.label || '';
     if (this.outline) markTocCurrent(chapter ? this.tocIndex(chapter) : -1);
-    updatePosition((this.page - 1) / Math.max(1, this.count - 1), `Page ${this.page} of ${this.count}`, String(this.page));
+    const label = [chapter?.label, `Page ${this.page} of ${this.count}`].filter(Boolean).join(' · ');
+    updatePosition((this.page - 1) / Math.max(1, this.count - 1), label, String(this.page));
   }
 
   next() { if (this.page < this.count) this.goTo(this.page + 1); }
@@ -597,8 +635,13 @@ class ComicEngine {
     this.count = state.info.pageCount || 0;
     if (!this.count) throw new ReaderError('This comic has no pages the reader can show.');
     this.page = clamp(parseInt(saved?.location, 10) || 0, 0, this.count - 1);
-    this.blobs = new Map(); // page index -> Promise<objectURL>
+    this.blobs = new Map(); // "page@width" -> Promise<objectURL>
+    this.aspect = 1.5;      // height / width of the last page seen
+    this.panelMode = false;
+    this.panels = [];
+    this.panelIndex = 0;
     buildToc([]);
+    buildPageGrid(this.count);
     this.render();
   }
 
@@ -610,18 +653,19 @@ class ComicEngine {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const vertical = this.direction === 'vertical';
     const css = vertical ? Math.min(box.width, 900) : box.width / (this.spreadOn() ? 2 : 1);
-    const px = css * dpr;
+    const px = css * dpr * (this.panelMode ? 1.6 : 1); // panels are shown zoomed in
     return [720, 1080, 1440, 1920, 2560].find((w) => px <= w) || 2560;
   }
 
   fetchPage(i) {
-    const key = `${i}@${this.pageWidth()}`;
+    const w = this.pageWidth();
+    const key = `${i}@${w}`;
     if (this.blobs.has(key)) {
       const p = this.blobs.get(key);
       this.blobs.delete(key); this.blobs.set(key, p);
       return p;
     }
-    const p = this.download(i, this.pageWidth());
+    const p = fetchComicPage(i, w);
     p.catch(() => this.blobs.delete(key));
     this.blobs.set(key, p);
     const keep = (state.config.prefetchPages || 3) * 2 + 8;
@@ -633,31 +677,17 @@ class ComicEngine {
     return p;
   }
 
-  /** Downloads one page, retrying while the server is still unpacking it or the connection blips. */
-  async download(i, w) {
-    for (let attempt = 0; ; attempt++) {
-      let r;
-      try {
-        r = await api(`/BookReader/Books/${itemId}/Pages/${i}?w=${w}`);
-      } catch (err) {
-        if (err instanceof ReaderError || attempt >= 2) throw err; // network dropped: try again
-      }
-      if (r?.ok) return URL.createObjectURL(await r.blob());
-      if (r && (r.status !== 503 || attempt >= 4)) throw new Error(`page ${i}: ${r.status}`);
-      await sleep(1000 * (attempt + 1));
-    }
-  }
-
   render() {
     viewer.innerHTML = '';
     this.observer?.disconnect();
     const vertical = this.direction === 'vertical';
     app.classList.toggle('mode-vertical', vertical);
+    if (vertical && this.panelMode) this.exitPanels();
     vertical ? this.renderVertical() : this.renderPaged();
   }
 
   spreadOn() {
-    return state.settings.comicTwoPageSpread && window.innerWidth >= 800 && window.innerWidth > window.innerHeight * 1.1;
+    return !this.panelMode && state.settings.comicTwoPageSpread && window.innerWidth >= 800 && window.innerWidth > window.innerHeight * 1.1;
   }
 
   // Cover alone, then pairs: [0] [1,2] [3,4] ...
@@ -674,35 +704,49 @@ class ComicEngine {
     this.show(this.page);
   }
 
+  /** Size of one page slot so the page fits the desk exactly. */
+  fit(aspect, perRow) {
+    const { w, h } = pageArea();
+    const width = Math.min(w / perRow, h / aspect);
+    return { width: Math.floor(width), height: Math.floor(width * aspect) };
+  }
+
   async show(i) {
     const group = this.groupFor(clamp(i, 0, this.count - 1));
     this.page = group[0];
+    this.showing = group;
     this.report();
-    const box = viewer.getBoundingClientRect();
-    const w = Math.floor(box.width / group.length);
     const slots = group.map(() => {
       const s = document.createElement('div');
       s.className = 'page-slot placeholder';
-      s.style.width = `${w}px`;
-      s.style.height = `${Math.floor(box.height)}px`;
+      const size = this.fit(this.aspect, group.length);
+      s.style.width = `${size.width}px`;
+      s.style.height = `${size.height}px`;
       return s;
     });
-    this.wrap.replaceChildren(...slots);
+    this.spread = paperSpread(slots);
+    this.wrap.replaceChildren(this.spread);
     await Promise.all(group.map(async (p, k) => {
       try {
         const url = await this.fetchPage(p);
-        if (!group.includes(this.page) && this.page !== group[0]) return;
+        if (this.showing !== group) return;
         const img = new Image();
         img.decoding = 'async';
         img.alt = `Page ${p + 1}`;
         img.src = url;
         await img.decode().catch(() => {});
+        if (this.showing !== group) return;
+        if (img.naturalWidth) {
+          this.aspect = img.naturalHeight / img.naturalWidth;
+          const size = this.fit(this.aspect, group.length);
+          slots[k].style.width = `${size.width}px`;
+          slots[k].style.height = `${size.height}px`;
+        }
         slots[k].classList.remove('placeholder');
-        if (group.length === 2) img.style.objectPosition = k === 0 ? (this.direction === 'rtl' ? 'left' : 'right') : (this.direction === 'rtl' ? 'right' : 'left');
         slots[k].replaceChildren(img);
       } catch {
         slots[k].classList.remove('placeholder');
-        slots[k].textContent = 'Page could not be loaded';
+        slots[k].innerHTML = '<div class="page-error">This page could not be loaded.</div>';
       }
     }));
     this.prefetch(group[group.length - 1] + 1);
@@ -771,33 +815,219 @@ class ComicEngine {
       this.page = i;
       this.scroller.scrollTop = this.slots[i].offsetTop;
       this.report();
-    } else {
-      this.show(i);
+      return Promise.resolve();
     }
+    return this.show(i);
   }
 
   report() {
     const shown = this.direction === 'vertical' ? [this.page] : this.groupFor(this.page);
-    const label = shown.length === 2 ? `Pages ${shown[0] + 1}–${shown[1] + 1} of ${this.count}` : `Page ${this.page + 1} of ${this.count}`;
+    let label = shown.length === 2 ? `Pages ${shown[0] + 1}–${shown[1] + 1} of ${this.count}` : `Page ${this.page + 1} of ${this.count}`;
+    if (this.panelMode && this.panels.length) label += ` · panel ${this.panelIndex + 1} of ${this.panels.length}`;
+    else {
+      const left = this.count - 1 - shown[shown.length - 1];
+      if (left > 0) label += ` · ${formatMinutes(left * 25)} left`;
+    }
+    markPageGrid(shown);
     updatePosition(this.page / Math.max(1, this.count - 1), label, String(this.page));
   }
 
-  next() {
+  async next() {
+    if (this.panelMode) {
+      if (this.panelIndex < this.panels.length - 1) { this.panelIndex++; this.showPanel(); return; }
+      if (this.page >= this.count - 1) return;
+      await this.goTo(this.page + 1);
+      await this.findPanels('first');
+      return;
+    }
     const g = this.groupFor(this.page);
     if (g[g.length - 1] < this.count - 1) this.goTo(g[g.length - 1] + 1);
   }
 
-  prev() {
+  async prev() {
+    if (this.panelMode) {
+      if (this.panelIndex > 0) { this.panelIndex--; this.showPanel(); return; }
+      if (this.page <= 0) return;
+      await this.goTo(this.page - 1);
+      await this.findPanels('last');
+      return;
+    }
     if (this.page > 0) this.goTo(this.groupFor(this.page - 1)[0]);
   }
+
+  // ---- Panel by panel ----
+  async togglePanels() {
+    if (this.panelMode) { this.exitPanels(); return; }
+    if (this.direction === 'vertical') { toast('Panel view works with left-to-right or right-to-left pages.'); return; }
+    this.panelMode = true;
+    $('btn-panels').setAttribute('aria-pressed', 'true');
+    app.classList.add('panel-mode');
+    await this.show(this.page); // one page at a time while zoomed in
+    await this.findPanels('first');
+  }
+
+  exitPanels() {
+    this.panelMode = false;
+    this.panels = [];
+    $('btn-panels').setAttribute('aria-pressed', 'false');
+    app.classList.remove('panel-mode');
+    delete app.dataset.panels;
+    $('panel-frame')?.remove();
+    if (this.direction !== 'vertical') this.show(this.page);
+  }
+
+  /** Finds the panels on the page showing now and zooms to the first or last one. */
+  async findPanels(which) {
+    const img = this.spread?.querySelector('img');
+    if (!img) return;
+    if (!img.complete) await img.decode().catch(() => {});
+    this.panels = detectPanels(img, this.direction === 'rtl');
+    app.dataset.panels = String(this.panels.length);
+    if (this.panels.length < 2) {
+      this.panels = [];
+      $('panel-frame')?.remove();
+      if (this.spread) this.spread.style.transform = '';
+      toast('No separate panels found on this page, so it is shown whole.');
+      this.report();
+      return;
+    }
+    this.panelIndex = which === 'last' ? this.panels.length - 1 : 0;
+    this.showPanel();
+  }
+
+  showPanel() {
+    const panel = this.panels[this.panelIndex];
+    const slot = this.spread?.querySelector('.page-slot');
+    if (!panel || !slot) return;
+    const stage = $('stage');
+    const sheet = $('sheet');
+    // Where the page sits on the stage, ignoring any zoom already applied.
+    const left = sheet.offsetLeft + this.wrap.offsetLeft + this.spread.offsetLeft + slot.offsetLeft;
+    const top = sheet.offsetTop + this.wrap.offsetTop + this.spread.offsetTop + slot.offsetTop;
+    const pw = panel.w * slot.offsetWidth, ph = panel.h * slot.offsetHeight;
+    const px = panel.x * slot.offsetWidth + slot.offsetLeft, py = panel.y * slot.offsetHeight + slot.offsetTop;
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const scale = Math.min((W * 0.94) / pw, (H * 0.94) / ph, 4);
+    const cx = W / 2, cy = H / 2;
+    const spreadLeft = left - slot.offsetLeft, spreadTop = top - slot.offsetTop;
+    const tx = cx - spreadLeft - scale * (px + pw / 2);
+    const ty = cy - spreadTop - scale * (py + ph / 2);
+    this.spread.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+
+    let frame = $('panel-frame');
+    if (!frame) {
+      frame = document.createElement('div');
+      frame.id = 'panel-frame';
+      frame.className = 'panel-frame';
+      stage.appendChild(frame);
+    }
+    Object.assign(frame.style, {
+      left: `${cx - (pw * scale) / 2}px`, top: `${cy - (ph * scale) / 2}px`,
+      width: `${pw * scale}px`, height: `${ph * scale}px`,
+    });
+    this.report();
+  }
+
+  isShowing(location) {
+    const n = Number(location);
+    return (this.direction === 'vertical' ? [this.page] : this.groupFor(this.page)).includes(n);
+  }
+  bookmarkLabel() { return `Page ${this.page + 1}`; }
+  goToLocation(location) { this.goTo(parseInt(location, 10) || 0); }
 
   first() { this.goTo(0); }
   last() { this.goTo(this.count - 1); }
   seek(f) { this.goTo(Math.round(f * (this.count - 1))); }
   previewLabel(f) { return `Page ${Math.round(f * (this.count - 1)) + 1} of ${this.count}`; }
   settingsChanged(key) { if (key === 'comicDirection' || key === 'comicTwoPageSpread') this.render(); }
-  resized() { this.render(); }
+  resized() {
+    if (this.panelMode && this.direction !== 'vertical') { this.show(this.page).then(() => this.showPanel()); return; }
+    this.render();
+  }
   get rtl() { return this.direction === 'rtl'; }
+}
+
+/** Downloads one comic page, retrying while the server is still unpacking it or the connection blips. */
+async function fetchComicPage(i, w) {
+  for (let attempt = 0; ; attempt++) {
+    let r;
+    try {
+      r = await api(`/BookReader/Books/${itemId}/Pages/${i}?w=${w}`);
+    } catch (err) {
+      if (err instanceof ReaderError || attempt >= 2) throw err; // network dropped: try again
+    }
+    if (r?.ok) return URL.createObjectURL(await r.blob());
+    if (r && (r.status !== 503 || attempt >= 4)) throw new Error(`page ${i}: ${r.status}`);
+    await sleep(1000 * (attempt + 1));
+  }
+}
+
+/**
+ * Finds comic panels by looking for the gutters between them (rows and columns
+ * that are almost all background colour), cutting the page along them again and
+ * again. Returns panels in reading order as fractions of the page.
+ */
+function detectPanels(img, rtl) {
+  const W = 300;
+  const H = Math.max(1, Math.round((W * img.naturalHeight) / img.naturalWidth));
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let data;
+  try {
+    ctx.drawImage(img, 0, 0, W, H);
+    data = ctx.getImageData(0, 0, W, H).data;
+  } catch {
+    return [];
+  }
+  const lum = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) lum[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+
+  // The gutter colour is whatever the page border mostly is (white, black, cream...).
+  const border = [];
+  for (let x = 0; x < W; x++) { border.push(lum[x], lum[W + x], lum[(H - 1) * W + x], lum[(H - 2) * W + x]); }
+  for (let y = 0; y < H; y++) { border.push(lum[y * W], lum[y * W + 1], lum[y * W + W - 1], lum[y * W + W - 2]); }
+  border.sort((a, b) => a - b);
+  const bg = border[Math.floor(border.length / 2)];
+  const isBg = (x, y) => Math.abs(lum[y * W + x] - bg) < 30;
+
+  const rowClear = (y, x0, x1) => { let n = 0; for (let x = x0; x < x1; x++) n += isBg(x, y); return n >= (x1 - x0) * 0.985; };
+  const colClear = (x, y0, y1) => { let n = 0; for (let y = y0; y < y1; y++) n += isBg(x, y); return n >= (y1 - y0) * 0.985; };
+  const bands = (from, to, clear) => {
+    const out = []; let start = -1;
+    for (let v = from; v < to; v++) {
+      if (!clear(v)) { if (start < 0) start = v; }
+      else if (start >= 0) { out.push([start, v]); start = -1; }
+    }
+    if (start >= 0) out.push([start, to]);
+    return out;
+  };
+
+  const panels = [];
+  const cut = (x0, y0, x1, y1, depth) => {
+    while (y0 < y1 && rowClear(y0, x0, x1)) y0++;
+    while (y1 > y0 && rowClear(y1 - 1, x0, x1)) y1--;
+    while (x0 < x1 && colClear(x0, y0, y1)) x0++;
+    while (x1 > x0 && colClear(x1 - 1, y0, y1)) x1--;
+    if (x1 - x0 < W * 0.08 || y1 - y0 < H * 0.04) return;
+    if (depth < 8) {
+      const rows = bands(y0, y1, (y) => rowClear(y, x0, x1));
+      if (rows.length > 1) { rows.forEach(([a, b]) => cut(x0, a, x1, b, depth + 1)); return; }
+      let cols = bands(x0, x1, (x) => colClear(x, y0, y1));
+      if (cols.length > 1) {
+        if (rtl) cols = cols.reverse();
+        cols.forEach(([a, b]) => cut(a, y0, b, y1, depth + 1));
+        return;
+      }
+    }
+    panels.push({ x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H });
+  };
+  cut(0, 0, W, H, 0);
+
+  const real = panels.filter((p) => p.w * p.h > 0.025);
+  // One panel covering nearly the whole page means there's nothing to step through.
+  if (real.length < 2) return [];
+  return real;
 }
 
 // ------------------------------------------------------------------
@@ -808,12 +1038,22 @@ function updatePosition(fraction, label, location, approximate = false) {
   if (!dragging) {
     $('seek').value = Math.round(fraction * 1000);
     setRibbon(fraction);
+    $('seek-label').textContent = '';
   }
   $('pos-label').textContent = label;
   $('pct-label').textContent = approximate ? '' : `${Math.round(fraction * 100)}% read`;
+  setStack(1 - fraction);
   state.position = { location, percent: Math.round(fraction * 1000) / 10 };
+  refreshBookmarkUi();
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(saveProgress, 1500);
+}
+
+/** The stack of page edges behind the sheet thins out as the book is read. */
+function setStack(remaining) {
+  const layers = remaining > 0.75 ? 4 : remaining > 0.5 ? 3 : remaining > 0.25 ? 2 : remaining > 0.02 ? 1 : 0;
+  app.classList.remove('stack-0', 'stack-1', 'stack-2', 'stack-3');
+  if (layers < 4) app.classList.add(`stack-${layers}`);
 }
 
 function setRibbon(fraction) {
@@ -839,6 +1079,162 @@ function saveProgress(keepalive = false) {
   }).catch(() => { /* offline: next save will retry */ });
 }
 
+/** Room for a page on the desk, leaving space for the page-edge stack. */
+function pageArea() {
+  const box = viewer.getBoundingClientRect();
+  return { w: Math.max(100, box.width - 16), h: Math.max(100, box.height - 10) };
+}
+
+/** Wraps page slots in a sheet of paper with the page-edge stack behind it. */
+function paperSpread(slots) {
+  const spread = document.createElement('div');
+  spread.className = 'spread paper-stack';
+  spread.append(...slots);
+  return spread;
+}
+
+function formatMinutes(seconds) {
+  const m = Math.max(1, Math.round(seconds / 60));
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+
+// ------------------------------------------------------------------
+// Bookmarks (saved on the server, so they follow the reader between devices)
+// ------------------------------------------------------------------
+async function loadBookmarks() {
+  try {
+    const res = await api(`/BookReader/Bookmarks/${itemId}`);
+    if (res.ok) state.bookmarks = await res.json();
+  } catch { /* keep going without */ }
+  renderBookmarks();
+}
+
+function currentBookmarks() {
+  const engine = state.engine;
+  if (!engine?.isShowing) return [];
+  return state.bookmarks.filter((b) => engine.isShowing(b.location));
+}
+
+function refreshBookmarkUi() {
+  const on = currentBookmarks().length > 0;
+  $('btn-bookmark').setAttribute('aria-pressed', String(on));
+  $('bookmark-label').textContent = on ? 'Bookmarked' : 'Bookmark';
+}
+
+async function toggleBookmark() {
+  const engine = state.engine;
+  if (!engine || !state.position.location) return;
+  const here = currentBookmarks();
+  try {
+    let res;
+    if (here.length) {
+      for (const b of here) {
+        res = await api(`/BookReader/Bookmarks/${itemId}?location=${encodeURIComponent(b.location)}`, { method: 'DELETE' });
+      }
+      toast('Bookmark removed');
+    } else {
+      res = await api(`/BookReader/Bookmarks/${itemId}`, {
+        method: 'POST',
+        body: JSON.stringify({ location: state.position.location, label: engine.bookmarkLabel(), percent: state.position.percent }),
+      });
+      toast('Page bookmarked');
+    }
+    if (res?.ok) state.bookmarks = await res.json();
+  } catch {
+    toast('The bookmark could not be saved. Check your connection.');
+  }
+  renderBookmarks();
+  refreshBookmarkUi();
+}
+
+function renderBookmarks() {
+  const list = $('bookmark-list');
+  $('bookmarks-section').hidden = state.bookmarks.length === 0;
+  $('chapters-heading').hidden = state.bookmarks.length === 0 || !$('toc-list').children.length;
+  list.replaceChildren(...state.bookmarks.map((b) => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = '#';
+    const label = document.createElement('span');
+    label.textContent = b.label || 'Bookmark';
+    const pct = document.createElement('small');
+    pct.textContent = `${Math.round(b.percent)}%`;
+    a.append(label, pct);
+    a.addEventListener('click', (e) => { e.preventDefault(); state.engine?.goToLocation(b.location); closePanels(); });
+    const remove = document.createElement('button');
+    remove.className = 'icon-btn remove';
+    remove.setAttribute('aria-label', `Remove bookmark: ${b.label || 'Bookmark'}`);
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    remove.addEventListener('click', async () => {
+      try {
+        const res = await api(`/BookReader/Bookmarks/${itemId}?location=${encodeURIComponent(b.location)}`, { method: 'DELETE' });
+        if (res.ok) state.bookmarks = await res.json();
+      } catch { /* ignore */ }
+      renderBookmarks();
+      refreshBookmarkUi();
+    });
+    li.append(a, remove);
+    return li;
+  }));
+  markPageGrid(null);
+}
+
+// ------------------------------------------------------------------
+// Comic page overview (the Pages ribbon)
+// ------------------------------------------------------------------
+const thumbs = { observer: null, queue: [], active: 0 };
+
+function buildPageGrid(count) {
+  const grid = $('page-grid');
+  const items = [];
+  for (let i = 0; i < count; i++) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = '#';
+    a.dataset.page = i;
+    a.innerHTML = `<span class="thumb"></span>${i + 1}`;
+    a.setAttribute('aria-label', `Page ${i + 1}`);
+    a.addEventListener('click', (e) => { e.preventDefault(); state.engine?.goTo(i); closePanels(); });
+    li.appendChild(a);
+    items.push(li);
+  }
+  grid.replaceChildren(...items);
+  thumbs.observer = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      thumbs.observer.unobserve(e.target);
+      thumbs.queue.push(e.target);
+    }
+    pumpThumbs();
+  }, { root: document.querySelector('#toc .drawer-body'), rootMargin: '300px 0px' });
+  grid.querySelectorAll('.thumb').forEach((t) => thumbs.observer.observe(t));
+}
+
+function pumpThumbs() {
+  while (thumbs.active < 4 && thumbs.queue.length) {
+    const el = thumbs.queue.shift();
+    const page = Number(el.parentElement.dataset.page);
+    thumbs.active++;
+    fetchComicPage(page, 360).then((url) => {
+      const img = new Image();
+      img.alt = '';
+      img.src = url;
+      el.replaceChildren(img);
+    }).catch(() => {}).finally(() => { thumbs.active--; pumpThumbs(); });
+  }
+}
+
+function markPageGrid(shown) {
+  const grid = $('page-grid');
+  if (!grid.children.length) return;
+  const marked = new Set(state.bookmarks.map((b) => Number(b.location)));
+  grid.querySelectorAll('a').forEach((a) => {
+    const n = Number(a.dataset.page);
+    if (shown) a.classList.toggle('current', shown.includes(n));
+    a.classList.toggle('marked', marked.has(n));
+  });
+}
+
 // ------------------------------------------------------------------
 // Interface wiring
 // ------------------------------------------------------------------
@@ -849,6 +1245,11 @@ function wireUi() {
   $('veil-action').addEventListener('click', closeBook);
   $('btn-toc').addEventListener('click', () => openPanel('toc'));
   $('btn-settings').addEventListener('click', () => openPanel('settings'));
+  $('btn-comic-settings').addEventListener('click', () => openPanel('settings'));
+  $('btn-bookmark').addEventListener('click', toggleBookmark);
+  $('btn-panels').addEventListener('click', () => state.engine?.togglePanels?.());
+  $('btn-prev').addEventListener('click', () => state.engine?.prev());
+  $('btn-next').addEventListener('click', () => state.engine?.next());
   $('scrim').addEventListener('click', closePanels);
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanels));
 
@@ -859,7 +1260,7 @@ function wireUi() {
   $('zone-prev').addEventListener('click', () => turn(-1));
   $('zone-next').addEventListener('click', () => turn(1));
 
-  // Tap the page centre (PDF / comics) to show or hide the bars.
+  // Tap the middle of a comic or PDF page to hide the desk controls and use the whole screen.
   const stage = $('stage');
   stage.addEventListener('click', (e) => {
     if (e.target.closest('.turn-zone')) return;
@@ -878,25 +1279,20 @@ function wireUi() {
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - st < 700) turn(dx < 0 ? 1 : -1);
   }, { passive: true });
 
-  // Scrubber
+  // "Jump to" slider in the Contents / Pages drawer
   const seek = $('seek');
   seek.addEventListener('input', () => {
     dragging = true;
-    $('scrubber').classList.add('dragging');
     const f = seek.value / 1000;
     setRibbon(f);
-    if (state.engine) $('pos-label').textContent = state.engine.previewLabel(f);
+    if (state.engine) $('seek-label').textContent = state.engine.previewLabel(f);
   });
   seek.addEventListener('change', () => {
     dragging = false;
-    $('scrubber').classList.remove('dragging');
     state.engine?.seek(seek.value / 1000);
   });
 
   document.addEventListener('keydown', onKey);
-  document.addEventListener('mousemove', (e) => {
-    if (e.clientY < 70 || e.clientY > window.innerHeight - 90) showChrome();
-  });
 
   // Settings controls
   document.querySelectorAll('[data-setting]').forEach((group) => {
@@ -924,7 +1320,6 @@ function wireUi() {
 
 function onKey(e) {
   if (e.target?.tagName === 'INPUT' && e.target.type !== 'range') return;
-  const rtl = state.engine?.rtl;
   const panelOpen = !$('toc').hidden || !$('settings').hidden;
   switch (e.key) {
     case 'ArrowRight': if (!panelOpen && e.target?.id !== 'seek') { turn(1); e.preventDefault?.(); } break;
@@ -935,9 +1330,15 @@ function onKey(e) {
     case 'End': state.engine?.last(); break;
     case 't': case 'T': openPanel('toc'); break;
     case 's': case 'S': openPanel('settings'); break;
+    case 'b': case 'B': if (!panelOpen) toggleBookmark(); break;
+    case 'p': case 'P': if (!panelOpen) state.engine?.togglePanels?.(); break;
     case 'f': case 'F': toggleFullscreen(); break;
     case 'Enter': if (!panelOpen && document.activeElement === document.body) toggleChrome(); break;
-    case 'Escape': panelOpen ? closePanels() : closeBook(); break;
+    case 'Escape':
+      if (panelOpen) closePanels();
+      else if (state.engine?.panelMode) state.engine.togglePanels();
+      else closeBook();
+      break;
     default:
   }
 }
@@ -977,22 +1378,35 @@ function syncSettingsUi() {
 }
 
 function applyChromeTheme() {
-  const theme = ['light', 'sepia', 'dark', 'black'].includes(state.settings.theme) ? state.settings.theme : 'dark';
+  const theme = ['light', 'sepia', 'dark', 'black'].includes(state.settings.theme) ? state.settings.theme : 'sepia';
   document.documentElement.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]').content = cssVar('--paper');
+  document.querySelector('meta[name="theme-color"]').content = cssVar('--desk');
 }
 
 function setAccent(color) {
-  if (/^#[0-9a-f]{3,8}$/i.test(color || '')) document.documentElement.style.setProperty('--accent', color);
+  if (!/^#[0-9a-f]{6}$/i.test(color || '') && !/^#[0-9a-f]{3}$/i.test(color || '')) return;
+  document.documentElement.style.setProperty('--accent', color);
+  // Pick dark or light marks on the accent so the bookmark tick stays readable.
+  const hex = color.length === 4 ? color.replace(/^#(.)(.)(.)$/, '#$1$1$2$2$3$3') : color;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  document.documentElement.style.setProperty('--on-accent', lum > 0.3 ? '#08202a' : '#ffffff');
 }
 
 function openPanel(id) {
   closePanels();
   $(id).hidden = false;
   $('scrim').hidden = false;
-  showChrome(true);
-  const focusTarget = id === 'toc' ? $('toc').querySelector('a.current') || $('toc').querySelector('a') : $(id).querySelector('button');
-  focusTarget?.focus({ preventScroll: false });
+  showChrome();
+  let focusTarget;
+  if (id === 'toc') {
+    focusTarget = $('page-grid').querySelector('a.current') || $('toc').querySelector('.toc-list a.current') || $('seek');
+    focusTarget?.scrollIntoView({ block: 'center' });
+  } else {
+    focusTarget = $(id).querySelector('button');
+  }
+  focusTarget?.focus({ preventScroll: true });
 }
 
 function closePanels() {
@@ -1000,11 +1414,9 @@ function closePanels() {
   $('settings').hidden = true;
   $('scrim').hidden = true;
   $('stage').focus({ preventScroll: true });
-  scheduleChromeHide(2500);
 }
 
 function buildToc(items) {
-  $('btn-toc').hidden = !items.length;
   $('toc-list').replaceChildren(...items.map((it) => {
     const li = document.createElement('li');
     li.className = `lvl-${it.level}`;
@@ -1015,29 +1427,24 @@ function buildToc(items) {
     li.appendChild(a);
     return li;
   }));
+  $('chapters-heading').hidden = state.bookmarks.length === 0 || !items.length;
 }
 
 function markTocCurrent(index) {
   $('toc-list').querySelectorAll('a').forEach((a, i) => a.classList.toggle('current', i === index));
 }
 
+/** Books keep their desk controls; comics and PDFs can hide them for a bigger page. */
 function toggleChrome() {
-  if (app.classList.contains('chrome-visible')) { app.classList.remove('chrome-visible'); clearTimeout(state.chromeTimer); }
-  else showChrome();
+  if (state.info?.kind === 'epub') return;
+  app.classList.toggle('chrome-visible');
+  setTimeout(() => state.engine?.resized(), 320);
 }
 
-function showChrome(stay = false) {
+function showChrome() {
+  if (app.classList.contains('chrome-visible')) return;
   app.classList.add('chrome-visible');
-  if (!stay) scheduleChromeHide(4000);
-}
-
-function scheduleChromeHide(ms) {
-  clearTimeout(state.chromeTimer);
-  state.chromeTimer = setTimeout(() => {
-    if ($('toc').hidden && $('settings').hidden && !dragging && !$('bottombar').matches(':hover') && !$('topbar').matches(':hover')) {
-      app.classList.remove('chrome-visible');
-    }
-  }, ms);
+  setTimeout(() => state.engine?.resized(), 320);
 }
 
 function toggleFullscreen() {
