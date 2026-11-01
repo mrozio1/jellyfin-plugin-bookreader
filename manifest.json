@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "1.1.0.0",
+        "changelog": "Release 1.1.0.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/mrozio1/jellyfin-plugin-bookreader/releases/download/v1.1.0.0/bookreader_1.1.0.0.zip",
+        "checksum": "301176bcaa5b8d720fa257be426caeff",
+        "timestamp": "2026-11-01T03:24:45Z"
+      },
+      {
         "version": "1.0.0.0",
         "changelog": "Release 1.0.0.0",
         "targetAbi": "10.11.0.0",
