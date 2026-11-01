@@ -169,6 +169,7 @@ async def open_book(browser, token, item, turns=6):
     result = {}
     try:
         for attempt in ("first_open", "reopen"):
+            await page.goto("about:blank")
             t = time.perf_counter()
             await page.goto(f"{BASE}/BookReader/Reader?id={item}#t={token}")
             try:

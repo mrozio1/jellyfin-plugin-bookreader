@@ -75,7 +75,7 @@ public class PageImageService
         var job = _inFlight.GetOrAdd(output, o => new Lazy<Task<string?>>(() =>
         {
             var t = Task.Run(() => EncodeAsync(book, index, width, dir, o, keepOriginal));
-            t.ContinueWith(_ => _inFlight.TryRemove(o, out _), TaskScheduler.Default);
+            t.ContinueWith(done => _inFlight.TryRemove(o, out _), TaskScheduler.Default);
             return t;
         }));
 
