@@ -19,6 +19,7 @@ DRM-protected books (Kindle store, Adobe DRM) can't be opened. That limit applie
 - **Desk & Ribbons design:** the page sits on a desk, and the stack of page edges behind it thins out as you read. Controls are ribbon markers tucked under the page, with big Previous and Next buttons on either side.
 - **Books:** running heads with the book and chapter title, page numbers, printed-style scene breaks, and a two-page spread on wide screens.
 - **Comics:** pages sit on the desk as sheets. **Pages** opens a thumbnail grid of the whole issue, and **Panels** zooms from panel to panel, finding the gutters automatically. Reading direction can be left to right, right to left (manga) or vertical (webtoons), with two-page spreads on wide screens.
+- **Zoom:** in comics and PDFs, pinch or double-tap to magnify a page and drag to move around; a sharper image loads as you zoom. In books, pinch or use the A−/A+ buttons to change text size on the fly. On a computer, use Ctrl + scroll or the `+`, `−` and `0` keys.
 - **Bookmarks:** the Bookmark ribbon marks the page. Bookmarks are saved on the server and listed under Contents (books) or Pages (comics).
 - **Page colours:** Paper, Sepia, Slate and Night, each with a matching desk.
 - **Typefaces:** Literata, the device's sans-serif, Atkinson Hyperlegible, or the book's own font. You can also set text size, line spacing and margins, and choose page-turn or scroll.
