@@ -129,7 +129,13 @@ def http_tests(token, books):
                                       ("page_mid_phone_size", n // 2, "?w=1080"), ("page_mid_phone_size_again", n // 2, "?w=1080")]:
                 s, c, h, ms = call("GET", f"/BookReader/Books/{item}/Pages/{idx}{extra}", token=token)
                 r[label] = {"status": s, "ms": ms, "bytes": len(c), "type": h.get("Content-Type")}
-        elif info.get("kind") == "pdf":
+        if info.get("kind") in ("pdf", "epub"):
+            # What a browser gets: the size must be known and the file not compressed,
+            # or the PDF viewer can't fetch just the pages it needs.
+            s, c, h, ms = call("GET", f"/BookReader/Books/{item}/File", token=token, headers={"Accept-Encoding": "gzip, deflate, br"})
+            r["browser_style_download"] = {"status": s, "ms": ms, "bytes": len(c), "content_length": h.get("Content-Length"),
+                                           "content_encoding": h.get("Content-Encoding"), "accept_ranges": h.get("Accept-Ranges")}
+        if info.get("kind") == "pdf":
             s, c, h, ms = call("GET", f"/BookReader/Books/{item}/File", token=token, headers={"Range": "bytes=0-262143"})
             r["range_first_256k"] = {"status": s, "ms": ms, "bytes": len(c)}
             s, c, h, ms = call("GET", f"/BookReader/Books/{item}/File", token=token, headers={"Range": "bytes=20000000-20262143"})

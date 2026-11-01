@@ -236,7 +236,10 @@ public partial class BookReaderController : ControllerBase
 
         var info = new FileInfo(path);
         var etag = new EntityTagHeaderValue("\"" + info.Length.ToString("x") + "-" + info.LastWriteTimeUtc.Ticks.ToString("x") + "\"");
-        Response.Headers[HeaderNames.CacheControl] = "private, max-age=86400";
+        // no-transform stops Jellyfin (and most proxies) compressing the file on the fly.
+        // Compression hides the file's size, and without it the PDF viewer can't fetch
+        // just the pages it needs and has to download the whole book first.
+        Response.Headers[HeaderNames.CacheControl] = "private, max-age=86400, no-transform";
         return PhysicalFile(path, BookFormats.ContentTypeFor(path), info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 
