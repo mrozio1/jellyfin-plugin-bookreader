@@ -43,11 +43,16 @@ def call(method, path, body=None, token=None, headers=None, timeout=600):
 
 
 def wait_for_server():
-    for _ in range(180):
+    # Jellyfin 10.11 answers with a "starting up" page until it is really ready.
+    for _ in range(300):
         try:
             s, c, _, _ = call("GET", "/System/Info/Public", timeout=5)
             if s == 200:
-                return json.loads(c)
+                info = json.loads(c)
+                if info.get("Version"):
+                    s2, _, _, _ = call("GET", "/Startup/Configuration", timeout=5)
+                    if s2 != 503:
+                        return info
         except Exception:
             pass
         time.sleep(1)
