@@ -16,15 +16,16 @@ DRM-protected books (Kindle store, Adobe DRM) can't be opened. That limit applie
 
 ## Features
 
-- **Four page colours:** Paper, Sepia, Slate and Night (pure black for OLED screens)
-- **Three bundled typefaces:** Literata (designed for screen reading), the device's sans-serif, and Atkinson Hyperlegible for low vision or dyslexia. You can also keep the book's own font
-- **Reading controls:** text size, line spacing and margins; page-turn or continuous scroll
-- **Comic modes:** left-to-right, right-to-left (manga) and vertical (webtoons), with two-page spreads on wide screens
-- **Synced position:** each user's place in each book is saved on the server, so it follows them across devices
-- **Contents:** a table of contents for EPUBs and for PDFs that have bookmarks
-- **Navigation:** chapter marks on the progress bar; tap, swipe, keyboard and TV remote (arrow keys + Enter)
-- **Offline-friendly:** all libraries and fonts are bundled, so nothing loads from the internet
-- **Integration:** a **Read** button on book pages. Optionally, the Play button opens books here instead of Jellyfin's built-in viewer
+- **Desk & Ribbons design:** the page sits on a desk, and the stack of page edges behind it thins out as you read. Controls are ribbon markers tucked under the page, with big Previous and Next buttons on either side.
+- **Books:** running heads with the book and chapter title, page numbers, printed-style scene breaks, and a two-page spread on wide screens.
+- **Comics:** pages sit on the desk as sheets. **Pages** opens a thumbnail grid of the whole issue, and **Panels** zooms from panel to panel, finding the gutters automatically. Reading direction can be left to right, right to left (manga) or vertical (webtoons), with two-page spreads on wide screens.
+- **Bookmarks:** the Bookmark ribbon marks the page. Bookmarks are saved on the server and listed under Contents (books) or Pages (comics).
+- **Page colours:** Paper, Sepia, Slate and Night, each with a matching desk.
+- **Typefaces:** Literata, the device's sans-serif, Atkinson Hyperlegible, or the book's own font. You can also set text size, line spacing and margins, and choose page-turn or scroll.
+- **Synced position:** each user's place in each book is saved on the server, so it follows them across devices.
+- **Navigation:** tap or swipe the page edges, or use the keyboard and TV remotes: arrow keys, Enter, T for Contents, B for Bookmark, P for Panels, S for Settings.
+- **Offline-friendly:** all libraries and fonts are bundled, so nothing loads from the internet.
+- **Integration:** a **Read** button on book pages. Optionally, the Play button opens books here instead of Jellyfin's built-in viewer.
 
 ## Speed
 
