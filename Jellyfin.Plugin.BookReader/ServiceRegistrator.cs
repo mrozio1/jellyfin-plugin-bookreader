@@ -11,9 +11,13 @@ public class ServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddSingleton<ComicArchiveService>();
+        serviceCollection.AddSingleton<PageImageService>();
         serviceCollection.AddSingleton<ConversionService>();
         serviceCollection.AddSingleton<ProgressStore>();
+        serviceCollection.AddSingleton<LocationsStore>();
+        serviceCollection.AddSingleton<AssetStore>();
         serviceCollection.AddSingleton<WebClientInjector>();
         serviceCollection.AddHostedService(sp => sp.GetRequiredService<WebClientInjector>());
+        serviceCollection.AddHostedService<CacheJanitor>();
     }
 }

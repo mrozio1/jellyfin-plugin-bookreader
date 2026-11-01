@@ -41,6 +41,15 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>How many pages to load ahead (higher = smoother, more data).</summary>
     public int PrefetchPages { get; set; } = 3;
 
+    /// <summary>Shrink comic pages to the reader's screen size and send them as WebP.</summary>
+    public bool OptimizeComicImages { get; set; } = true;
+
+    /// <summary>WebP quality for optimized comic pages (40–95).</summary>
+    public int ComicImageQuality { get; set; } = 80;
+
+    /// <summary>Largest the page cache may grow, in GB. 0 = no limit.</summary>
+    public double CacheSizeLimitGb { get; set; } = 5;
+
     // ---- Integration ----
     /// <summary>Add a "Read" button to book pages in the Jellyfin web client.</summary>
     public bool InjectIntoWebClient { get; set; } = true;

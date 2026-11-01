@@ -1,4 +1,5 @@
-using System.Reflection;
+using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.BookReader.Services;
 using MediaBrowser.Controller.Entities;
@@ -20,26 +21,40 @@ public partial class BookReaderController : ControllerBase
 {
     private const string UserIdClaim = "Jellyfin-UserId";
 
+    // Page turns and PDF range reads hit the API many times a second; checking the
+    // library for each one is wasted work, so a user's access to a book is
+    // remembered for a minute.
+    private static readonly ConcurrentDictionary<(Guid User, Guid Item), (BaseItem Item, long Expires)> AccessCache = new();
+
     private readonly ILibraryManager _library;
     private readonly IUserManager _users;
     private readonly ComicArchiveService _comics;
+    private readonly PageImageService _pageImages;
     private readonly ConversionService _conversion;
     private readonly ProgressStore _progress;
+    private readonly LocationsStore _locations;
+    private readonly AssetStore _assets;
     private readonly WebClientInjector _injector;
 
     public BookReaderController(
         ILibraryManager library,
         IUserManager users,
         ComicArchiveService comics,
+        PageImageService pageImages,
         ConversionService conversion,
         ProgressStore progress,
+        LocationsStore locations,
+        AssetStore assets,
         WebClientInjector injector)
     {
         _library = library;
         _users = users;
         _comics = comics;
+        _pageImages = pageImages;
         _conversion = conversion;
         _progress = progress;
+        _locations = locations;
+        _assets = assets;
         _injector = injector;
     }
 
@@ -61,19 +76,39 @@ public partial class BookReaderController : ControllerBase
             return NotFound();
         }
 
-        var asm = Assembly.GetExecutingAssembly();
-        var resource = typeof(Plugin).Namespace + ".Web." + path.Replace('/', '.');
-        var stream = asm.GetManifestResourceStream(resource);
-        if (stream is null)
+        var asset = _assets.Get(path);
+        if (asset is null)
         {
             return NotFound();
         }
 
-        // Libraries never change between plugin versions; app files are revalidated.
-        Response.Headers[HeaderNames.CacheControl] = path.StartsWith("lib/", StringComparison.Ordinal)
-            ? "public, max-age=604800"
+        // Versioned links (?v=) never change, so browsers can keep them for a year.
+        // Anything else is checked with the server each time (a tiny 304 when unchanged).
+        Response.Headers[HeaderNames.CacheControl] = Request.Query.ContainsKey("v") && path != "reader.html"
+            ? "public, max-age=31536000, immutable"
             : "no-cache";
-        return File(stream, BookFormats.ContentTypeFor(path));
+        Response.Headers[HeaderNames.ETag] = asset.ETag;
+        Response.Headers[HeaderNames.Vary] = HeaderNames.AcceptEncoding;
+
+        if (Request.Headers.IfNoneMatch.ToString() == asset.ETag)
+        {
+            return StatusCode(StatusCodes.Status304NotModified);
+        }
+
+        var accept = Request.Headers.AcceptEncoding.ToString();
+        if (asset.Brotli is not null && accept.Contains("br", StringComparison.OrdinalIgnoreCase))
+        {
+            Response.Headers[HeaderNames.ContentEncoding] = "br";
+            return File(asset.Brotli, asset.ContentType);
+        }
+
+        if (asset.Gzip is not null && accept.Contains("gzip", StringComparison.OrdinalIgnoreCase))
+        {
+            Response.Headers[HeaderNames.ContentEncoding] = "gzip";
+            return File(asset.Gzip, asset.ContentType);
+        }
+
+        return File(asset.Raw, asset.ContentType);
     }
 
     // ------------------------------------------------------------------
@@ -164,12 +199,12 @@ public partial class BookReaderController : ControllerBase
         {
             try
             {
-                var index = await _comics.GetIndexAsync(path).ConfigureAwait(false);
-                pageCount = index.Pages.Count;
+                var book = await _comics.OpenAsync(path).ConfigureAwait(false);
+                pageCount = book.Pages.Count;
             }
             catch (Exception)
             {
-                return Ok(Describe(item, ReaderKind.Unsupported, null, new { state = "Failed", error = "This comic archive could not be opened." }));
+                return Ok(Describe(item, ReaderKind.Unsupported, null, new { state = "Failed", error = "This comic archive could not be opened. It may be damaged." }));
             }
         }
 
@@ -205,10 +240,13 @@ public partial class BookReaderController : ControllerBase
         return PhysicalFile(path, BookFormats.ContentTypeFor(path), info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 
-    /// <summary>One comic page as an image.</summary>
+    /// <summary>
+    /// One comic page. Pass w (the width in device pixels the page will be shown at)
+    /// to get a smaller WebP version sized for the screen.
+    /// </summary>
     [HttpGet("Books/{itemId}/Pages/{index:int}")]
     [Authorize]
-    public async Task<IActionResult> ComicPage([FromRoute] Guid itemId, [FromRoute] int index)
+    public async Task<IActionResult> ComicPage([FromRoute] Guid itemId, [FromRoute] int index, [FromQuery] int? w)
     {
         var (item, error) = ResolveItem(itemId);
         if (item is null)
@@ -221,14 +259,88 @@ public partial class BookReaderController : ControllerBase
             return BadRequest();
         }
 
-        var page = await _comics.OpenPageAsync(item.Path, index).ConfigureAwait(false);
-        if (page is null)
+        var ct = HttpContext.RequestAborted;
+        var book = await _comics.OpenAsync(item.Path).ConfigureAwait(false);
+        if (index < 0 || index >= book.Pages.Count)
         {
             return NotFound();
         }
 
         Response.Headers[HeaderNames.CacheControl] = "private, max-age=604800, immutable";
-        return File(page.Value.Stream, BookFormats.ContentTypeFor(page.Value.Name));
+
+        try
+        {
+            if (PageImageService.SnapWidth(w) is int width)
+            {
+                var resized = await _pageImages.GetAsync(book, index, width, ct).ConfigureAwait(false);
+                if (resized is not null)
+                {
+                    return PhysicalFile(resized, "image/webp");
+                }
+            }
+
+            var stream = await _comics.OpenPageAsync(book, index, ct).ConfigureAwait(false);
+            return File(stream, ComicArchiveService.ContentTypeFor(book, index));
+        }
+        catch (TimeoutException)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "The page is still being unpacked." });
+        }
+        catch (InvalidDataException)
+        {
+            return NotFound(new { message = "This page could not be read from the archive." });
+        }
+    }
+
+    /// <summary>Saved EPUB locations (the position-to-percentage map), shared by everyone.</summary>
+    [HttpGet("Books/{itemId}/Locations")]
+    [Authorize]
+    public async Task<IActionResult> GetLocations([FromRoute] Guid itemId)
+    {
+        var (item, error) = ResolveItem(itemId);
+        if (item is null)
+        {
+            return error!;
+        }
+
+        var json = await _locations.GetAsync(item.Path).ConfigureAwait(false);
+        if (json is null)
+        {
+            return NoContent();
+        }
+
+        Response.Headers[HeaderNames.CacheControl] = "private, max-age=3600";
+        return Content(json, "application/json");
+    }
+
+    [HttpPost("Books/{itemId}/Locations")]
+    [Authorize]
+    [RequestSizeLimit(4_000_000)]
+    public async Task<IActionResult> SaveLocations([FromRoute] Guid itemId, [FromBody] JsonElement body)
+    {
+        var (item, error) = ResolveItem(itemId);
+        if (item is null)
+        {
+            return error!;
+        }
+
+        // Only accept a plain list of EPUB CFIs.
+        if (body.ValueKind != JsonValueKind.Array || body.GetArrayLength() > 200_000)
+        {
+            return BadRequest();
+        }
+
+        foreach (var el in body.EnumerateArray())
+        {
+            var s = el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+            if (s is null || s.Length > 1024 || !s.StartsWith("epubcfi(", StringComparison.Ordinal))
+            {
+                return BadRequest();
+            }
+        }
+
+        await _locations.SaveAsync(item.Path, body.GetRawText()).ConfigureAwait(false);
+        return NoContent();
     }
 
     // ------------------------------------------------------------------
@@ -245,6 +357,7 @@ public partial class BookReaderController : ControllerBase
         }
 
         var p = await _progress.GetProgressAsync(uid, itemId).ConfigureAwait(false);
+        Response.Headers[HeaderNames.CacheControl] = "no-store";
         return p is null ? NoContent() : Ok(p);
     }
 
@@ -282,10 +395,21 @@ public partial class BookReaderController : ControllerBase
     [Authorize(Policy = "RequiresElevation")]
     public IActionResult AdminStatus()
     {
+        long cacheBytes = 0;
+        try
+        {
+            cacheBytes = new DirectoryInfo(BookKey.CacheRoot).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+        }
+        catch (IOException)
+        {
+            // ignore
+        }
+
         return Ok(new
         {
             calibre = ConversionService.FindCalibre(),
-            ddjvu = ConversionService.FindDdjvu()
+            ddjvu = ConversionService.FindDdjvu(),
+            cacheMb = Math.Round(cacheBytes / 1048576.0)
         });
     }
 
@@ -296,6 +420,28 @@ public partial class BookReaderController : ControllerBase
     {
         var message = _injector.Apply(Plugin.Instance!.Configuration.InjectIntoWebClient);
         return Ok(new { message });
+    }
+
+    /// <summary>Empties the page cache.</summary>
+    [HttpPost("Admin/ClearCache")]
+    [Authorize(Policy = "RequiresElevation")]
+    public IActionResult ClearCache()
+    {
+        var removed = 0;
+        foreach (var dir in new DirectoryInfo(BookKey.CacheRoot).GetDirectories())
+        {
+            try
+            {
+                dir.Delete(true);
+                removed++;
+            }
+            catch (IOException)
+            {
+                // In use; it will be cleared next time.
+            }
+        }
+
+        return Ok(new { message = $"Cleared {removed} books from the cache. Restart Jellyfin if comics you were reading show errors." });
     }
 
     // ------------------------------------------------------------------
@@ -330,6 +476,12 @@ public partial class BookReaderController : ControllerBase
             return (null, Unauthorized());
         }
 
+        var now = Environment.TickCount64;
+        if (AccessCache.TryGetValue((uid, itemId), out var hit) && hit.Expires > now)
+        {
+            return (hit.Item, null);
+        }
+
         var user = _users.GetUserById(uid);
         var item = _library.GetItemById(itemId);
         if (user is null || item is null || !item.IsVisible(user))
@@ -342,6 +494,12 @@ public partial class BookReaderController : ControllerBase
             return (null, NotFound(new { message = "The book file is missing on the server." }));
         }
 
+        if (AccessCache.Count > 10_000)
+        {
+            AccessCache.Clear();
+        }
+
+        AccessCache[(uid, itemId)] = (item, now + 60_000);
         return (item, null);
     }
 

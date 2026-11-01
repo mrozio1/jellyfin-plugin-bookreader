@@ -4,12 +4,12 @@
    decoration is the ribbon bookmark that marks your place.
    ------------------------------------------------------------------ */
 
-@font-face { font-family: "Literata"; src: url("fonts/literata-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
-@font-face { font-family: "Literata"; src: url("fonts/literata-400-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
-@font-face { font-family: "Literata"; src: url("fonts/literata-700-normal.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
-@font-face { font-family: "Literata"; src: url("fonts/literata-700-italic.woff2") format("woff2"); font-weight: 700; font-style: italic; font-display: swap; }
-@font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Literata"; src: url("fonts/literata-400-normal.woff2?v=__V__") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Literata"; src: url("fonts/literata-400-italic.woff2?v=__V__") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Literata"; src: url("fonts/literata-700-normal.woff2?v=__V__") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Literata"; src: url("fonts/literata-700-italic.woff2?v=__V__") format("woff2"); font-weight: 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-400-normal.woff2?v=__V__") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible"; src: url("fonts/atkinson-700-normal.woff2?v=__V__") format("woff2"); font-weight: 700; font-display: swap; }
 
 :root {
   --accent: #00a4dc;

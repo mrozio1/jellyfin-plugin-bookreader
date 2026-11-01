@@ -107,6 +107,36 @@
                         <input is="emby-input" type="number" id="PrefetchPages" min="1" max="10" />
                         <div class="fieldDescription">Higher makes page turns smoother on slow connections but uses more data. 3 suits most setups.</div>
                     </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="OptimizeComicImages" type="checkbox" is="emby-checkbox" />
+                            <span>Resize comic pages for each screen</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Sends pages at the size the device shows them, as WebP. Pages often shrink from 2–4 MB to a few hundred KB, which is the biggest speed-up away from home. Each page is processed once and kept in the cache.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ComicImageQuality">Resized page quality (40–95)</label>
+                        <input is="emby-input" type="number" id="ComicImageQuality" min="40" max="95" />
+                        <div class="fieldDescription">80 looks the same as the original on phones and tablets. Raise it if you notice soft lettering.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Cache</h3>
+                    <p class="fieldDescription">Unpacked RAR/7z comics and resized pages are kept so books open instantly next time. The books opened least recently are removed when the cache is full.</p>
+                    <p id="CacheStatus" class="fieldDescription"></p>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="CacheSizeLimitGb">Cache size limit (GB)</label>
+                        <input is="emby-input" type="number" id="CacheSizeLimitGb" min="0" step="0.5" />
+                        <div class="fieldDescription">0 means no limit.</div>
+                    </div>
+
+                    <button is="emby-button" type="button" id="ClearCache" class="raised emby-button">
+                        <span>Clear cache</span>
+                    </button>
                 </div>
 
                 <div class="verticalSection">
@@ -176,9 +206,9 @@
             var page = document.querySelector('#BookReaderConfigPage');
             var form = document.querySelector('#BookReaderConfigForm');
             var text = ['DefaultTheme', 'AccentColor', 'DefaultFont', 'DefaultMargins', 'DefaultLayout', 'ComicDirection', 'CalibreConvertPath', 'DdjvuPath'];
-            var ints = ['DefaultFontSize', 'PrefetchPages', 'ConversionTimeoutMinutes'];
-            var floats = ['DefaultLineHeight'];
-            var bools = ['AllowUserOverrides', 'ComicTwoPageSpread', 'InjectIntoWebClient', 'ReplaceBuiltInReader', 'EnableConversion'];
+            var ints = ['DefaultFontSize', 'PrefetchPages', 'ConversionTimeoutMinutes', 'ComicImageQuality'];
+            var floats = ['DefaultLineHeight', 'CacheSizeLimitGb'];
+            var bools = ['AllowUserOverrides', 'ComicTwoPageSpread', 'InjectIntoWebClient', 'ReplaceBuiltInReader', 'EnableConversion', 'OptimizeComicImages'];
 
             function el(id) { return page.querySelector('#' + id); }
 
@@ -187,6 +217,7 @@
                     var calibre = s.calibre ? 'Calibre found at ' + s.calibre + '.' : 'Calibre not found, so MOBI, AZW3 and similar files can\'t be opened yet.';
                     var djvu = s.ddjvu ? ' DjVuLibre found at ' + s.ddjvu + '.' : ' DjVuLibre not found, so DjVu files can\'t be opened yet.';
                     el('ToolStatus').textContent = calibre + djvu;
+                    el('CacheStatus').textContent = 'The cache is using ' + (s.cacheMb >= 1024 ? (s.cacheMb / 1024).toFixed(1) + ' GB' : s.cacheMb + ' MB') + '.';
                 }).catch(function () {
                     el('ToolStatus').textContent = 'Could not check for converters.';
                 });
@@ -203,13 +234,22 @@
                 showTools();
             });
 
+            el('ClearCache').addEventListener('click', function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('BookReader/Admin/ClearCache'), dataType: 'json' }).then(function (r) {
+                    Dashboard.hideLoadingMsg();
+                    Dashboard.alert(r.message);
+                    showTools();
+                }).catch(function () { Dashboard.hideLoadingMsg(); });
+            });
+
             form.addEventListener('submit', function (e) {
                 e.preventDefault();
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     text.forEach(function (k) { config[k] = el(k).value.trim(); });
                     ints.forEach(function (k) { config[k] = parseInt(el(k).value, 10) || config[k]; });
-                    floats.forEach(function (k) { config[k] = parseFloat(el(k).value) || config[k]; });
+                    floats.forEach(function (k) { var v = parseFloat(el(k).value); config[k] = isNaN(v) ? config[k] : v; });
                     bools.forEach(function (k) { config[k] = el(k).checked; });
                     return ApiClient.updatePluginConfiguration(pluginId, config);
                 }).then(function (result) {

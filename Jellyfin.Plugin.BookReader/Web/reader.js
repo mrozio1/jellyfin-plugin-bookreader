@@ -8,6 +8,10 @@
 // ------------------------------------------------------------------
 const API = location.pathname.replace(/\/BookReader\/Reader\/?$/i, '');
 const ASSETS = `${location.origin}${API}/BookReader/Assets/`;
+// Versioned links let browsers keep the reader's files for a year (see AssetStore).
+const VERSION = document.documentElement.dataset.v;
+const VQ = VERSION && /^[0-9.]+$/.test(VERSION) ? `?v=${VERSION}` : '';
+const asset = (p) => `${ASSETS}${p}${VQ}`;
 const params = new URLSearchParams(location.search);
 const itemId = params.get('id');
 const token = readToken();
@@ -136,9 +140,11 @@ async function waitForConversion() {
 class EpubEngine {
   async open(saved) {
     setLoading('Opening your book');
-    await loadScript(`${ASSETS}lib/jszip.min.js`);
-    await loadScript(`${ASSETS}lib/epub.min.js`);
-    const data = await download(`/BookReader/Books/${itemId}/File`);
+    const [data] = await Promise.all([
+      download(`/BookReader/Books/${itemId}/File`),
+      loadScript(asset('lib/jszip.min.js')),
+      loadScript(asset('lib/epub.min.js')),
+    ]);
     this.book = window.ePub(data);
     await this.book.ready;
 
@@ -220,12 +226,12 @@ class EpubEngine {
     const ink = cssVar('--ink');
     const accent = cssVar('--accent');
     style.textContent = `
-      @font-face { font-family: "Literata"; src: url("${ASSETS}fonts/literata-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; }
-      @font-face { font-family: "Literata"; src: url("${ASSETS}fonts/literata-400-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; }
-      @font-face { font-family: "Literata"; src: url("${ASSETS}fonts/literata-700-normal.woff2") format("woff2"); font-weight: 700; font-style: normal; }
-      @font-face { font-family: "Literata"; src: url("${ASSETS}fonts/literata-700-italic.woff2") format("woff2"); font-weight: 700; font-style: italic; }
-      @font-face { font-family: "Atkinson Hyperlegible"; src: url("${ASSETS}fonts/atkinson-400-normal.woff2") format("woff2"); font-weight: 400; }
-      @font-face { font-family: "Atkinson Hyperlegible"; src: url("${ASSETS}fonts/atkinson-700-normal.woff2") format("woff2"); font-weight: 700; }
+      @font-face { font-family: "Literata"; src: url("${asset('fonts/literata-400-normal.woff2')}") format("woff2"); font-weight: 400; font-style: normal; }
+      @font-face { font-family: "Literata"; src: url("${asset('fonts/literata-400-italic.woff2')}") format("woff2"); font-weight: 400; font-style: italic; }
+      @font-face { font-family: "Literata"; src: url("${asset('fonts/literata-700-normal.woff2')}") format("woff2"); font-weight: 700; font-style: normal; }
+      @font-face { font-family: "Literata"; src: url("${asset('fonts/literata-700-italic.woff2')}") format("woff2"); font-weight: 700; font-style: italic; }
+      @font-face { font-family: "Atkinson Hyperlegible"; src: url("${asset('fonts/atkinson-400-normal.woff2')}") format("woff2"); font-weight: 400; }
+      @font-face { font-family: "Atkinson Hyperlegible"; src: url("${asset('fonts/atkinson-700-normal.woff2')}") format("woff2"); font-weight: 700; }
       html { color-scheme: ${['dark', 'black'].includes(s.theme) ? 'dark' : 'light'}; }
       html, body { background: transparent !important; color: ${ink} !important; }
       body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
@@ -273,15 +279,19 @@ class EpubEngine {
   }
 
   async loadLocations() {
-    const key = `bookreader-locations-${itemId}`;
+    // Measuring a book means reading every chapter, which is slow on phones.
+    // The server keeps the result, so it's done once per book for everyone.
     let json = null;
-    try { json = localStorage.getItem(key); } catch { /* ignore */ }
+    try {
+      const res = await api(`/BookReader/Books/${itemId}/Locations`);
+      if (res.status === 200) json = await res.text();
+    } catch { /* fall through and measure here */ }
     if (json) {
       this.book.locations.load(json);
     } else {
-      await sleep(400);
-      await this.book.locations.generate(1200);
-      try { localStorage.setItem(key, this.book.locations.save()); } catch { /* storage full */ }
+      await sleep(1500); // let the first page settle before the heavy work
+      await this.book.locations.generate(1600);
+      api(`/BookReader/Books/${itemId}/Locations`, { method: 'POST', body: this.book.locations.save() }).catch(() => {});
     }
     this.locationsReady = true;
     this.locationList = JSON.parse(this.book.locations.save());
@@ -345,12 +355,16 @@ function flattenToc(items, level = 0, out = []) {
 class PdfEngine {
   async open(saved) {
     setLoading('Opening your book');
-    const pdfjs = await import(`${ASSETS}lib/pdf.min.mjs`);
-    pdfjs.GlobalWorkerOptions.workerSrc = `${ASSETS}lib/pdf.worker.min.mjs`;
+    const pdfjs = await import(asset('lib/pdf.min.mjs'));
+    pdfjs.GlobalWorkerOptions.workerSrc = asset('lib/pdf.worker.min.mjs');
     this.doc = await pdfjs.getDocument({
       url: `${location.origin}${API}/BookReader/Books/${itemId}/File`,
       httpHeaders: { Authorization: AUTH },
       rangeChunkSize: 256 * 1024,
+      // Only fetch the parts of the file needed for the pages being viewed.
+      // (With streaming on, pdf.js also downloads the whole file in the background,
+      // which competes with the first page on slower connections.)
+      disableStream: true,
       disableAutoFetch: true,
       isEvalSupported: false,
     }).promise;
@@ -426,17 +440,33 @@ class PdfEngine {
     slot.style.width = canvas.style.width;
     slot.style.height = canvas.style.height;
     slot.replaceChildren(canvas);
-    // Warm up the next page so turning feels instant.
-    if (n < this.count) this.renderToCanvas(n + 1, box.width, box.height - 16);
+    // Get the neighbours ready so turning feels instant.
+    const h = box.height - 16;
+    if (n < this.count) this.renderToCanvas(n + 1, box.width, h);
+    if (n > 1) this.renderToCanvas(n - 1, box.width, h);
+    if (n + 2 <= this.count) this.doc.getPage(n + 2).catch(() => {}); // fetch its data only
   }
 
-  async renderToCanvas(n, maxW, maxH) {
+  /**
+   * Renders a page once and reuses it. Keeps the promise, so asking again for a
+   * page that is still rendering (a quick page turn) waits for that render
+   * instead of starting a second one.
+   */
+  renderToCanvas(n, maxW, maxH) {
     const key = `${n}:${Math.round(maxW)}x${Math.round(maxH)}`;
     if (this.cache.has(key)) {
-      const c = this.cache.get(key);
-      this.cache.delete(key); this.cache.set(key, c);
-      return cloneCanvas(c);
+      const p = this.cache.get(key);
+      this.cache.delete(key); this.cache.set(key, p);
+      return p;
     }
+    const p = this.paint(n, maxW, maxH);
+    p.then((c) => { if (!c) this.cache.delete(key); });
+    this.cache.set(key, p);
+    while (this.cache.size > 6) this.cache.delete(this.cache.keys().next().value);
+    return p;
+  }
+
+  async paint(n, maxW, maxH) {
     const page = await this.doc.getPage(n);
     const vp1 = page.getViewport({ scale: 1 });
     const fit = maxH ? Math.min(maxW / vp1.width, maxH / vp1.height) : maxW / vp1.width;
@@ -460,9 +490,7 @@ class PdfEngine {
       return null;
     }
     page.cleanup();
-    this.cache.set(key, canvas);
-    while (this.cache.size > 4) this.cache.delete(this.cache.keys().next().value);
-    return cloneCanvas(canvas);
+    return canvas;
   }
 
   // --- Continuous scroll, pages render as they come into view ---
@@ -546,13 +574,6 @@ class PdfEngine {
   resized() { this.cache.clear(); this.render(); }
 }
 
-function cloneCanvas(src) {
-  const c = document.createElement('canvas');
-  c.width = src.width; c.height = src.height;
-  c.style.width = src.style.width; c.style.height = src.style.height;
-  c.getContext('2d').drawImage(src, 0, 0);
-  return c;
-}
 
 // ------------------------------------------------------------------
 // Comic engine: pages are fetched one by one, with a few loaded ahead
@@ -569,17 +590,26 @@ class ComicEngine {
 
   get direction() { return state.settings.comicDirection || 'ltr'; }
 
+  /** Width in device pixels a page is shown at, snapped to the sizes the server makes. */
+  pageWidth() {
+    const box = viewer.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const vertical = this.direction === 'vertical';
+    const css = vertical ? Math.min(box.width, 900) : box.width / (this.spreadOn() ? 2 : 1);
+    const px = css * dpr;
+    return [720, 1080, 1440, 1920, 2560].find((w) => px <= w) || 2560;
+  }
+
   fetchPage(i) {
-    if (this.blobs.has(i)) {
-      const p = this.blobs.get(i);
-      this.blobs.delete(i); this.blobs.set(i, p);
+    const key = `${i}@${this.pageWidth()}`;
+    if (this.blobs.has(key)) {
+      const p = this.blobs.get(key);
+      this.blobs.delete(key); this.blobs.set(key, p);
       return p;
     }
-    const p = api(`/BookReader/Books/${itemId}/Pages/${i}`)
-      .then((r) => { if (!r.ok) throw new Error(`page ${i}`); return r.blob(); })
-      .then((b) => URL.createObjectURL(b));
-    p.catch(() => this.blobs.delete(i));
-    this.blobs.set(i, p);
+    const p = this.download(i, this.pageWidth());
+    p.catch(() => this.blobs.delete(key));
+    this.blobs.set(key, p);
     const keep = (state.config.prefetchPages || 3) * 2 + 8;
     while (this.blobs.size > keep) {
       const [oldest, op] = this.blobs.entries().next().value;
@@ -587,6 +617,21 @@ class ComicEngine {
       op.then((u) => setTimeout(() => URL.revokeObjectURL(u), 2000)).catch(() => {});
     }
     return p;
+  }
+
+  /** Downloads one page, retrying while the server is still unpacking it or the connection blips. */
+  async download(i, w) {
+    for (let attempt = 0; ; attempt++) {
+      let r;
+      try {
+        r = await api(`/BookReader/Books/${itemId}/Pages/${i}?w=${w}`);
+      } catch (err) {
+        if (err instanceof ReaderError || attempt >= 2) throw err; // network dropped: try again
+      }
+      if (r?.ok) return URL.createObjectURL(await r.blob());
+      if (r && (r.status !== 503 || attempt >= 4)) throw new Error(`page ${i}: ${r.status}`);
+      await sleep(1000 * (attempt + 1));
+    }
   }
 
   render() {
