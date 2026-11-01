@@ -262,6 +262,7 @@ async def feature_tests(browser, token, books):
     await page.click("#btn-bookmark")
     await page.wait_for_function("document.getElementById('btn-bookmark').getAttribute('aria-pressed') === 'true'", timeout=10000)
     await page.wait_for_timeout(2500)  # let the reading position save too
+    where_before = await page.inner_text("#pos-label")
     await page.screenshot(path=os.path.join(SHOTS, "phone-bookmarked.png"))
     await page.click("#btn-toc")
     await page.wait_for_timeout(600)
@@ -269,6 +270,8 @@ async def feature_tests(browser, token, books):
     await ctx.close()
     ctx, page, errors2 = await ready_page(browser, token, epub, phone)
     await page.wait_for_timeout(1500)
+    f["resumed_at_same_place"] = (await page.inner_text("#pos-label")) == where_before
+    f["position_before_after"] = [where_before, await page.inner_text("#pos-label")]
     f["bookmark_kept_after_reopen"] = await page.get_attribute("#btn-bookmark", "aria-pressed") == "true"
     f["bookmark_list_entries"] = await page.evaluate("document.querySelectorAll('#bookmark-list li').length")
     f["epub_errors"] = errors + errors2

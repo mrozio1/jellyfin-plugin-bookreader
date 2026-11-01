@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.BookReader.Services;
 
@@ -7,10 +8,16 @@ namespace Jellyfin.Plugin.BookReader.Services;
 public class ReadingProgress
 {
     /// <summary>EPUB CFI, PDF page number, or comic page index, as a string.</summary>
+    [JsonPropertyName("location")]
+
     public string Location { get; set; } = string.Empty;
 
     /// <summary>0 to 100.</summary>
+    [JsonPropertyName("percent")]
+
     public double Percent { get; set; }
+
+    [JsonPropertyName("updatedUtc")]
 
     public DateTime UpdatedUtc { get; set; }
 }
@@ -19,12 +26,20 @@ public class ReadingProgress
 public class Bookmark
 {
     /// <summary>EPUB CFI, PDF page number, or comic page index, as a string.</summary>
+    [JsonPropertyName("location")]
+
     public string Location { get; set; } = string.Empty;
 
     /// <summary>What to show in the list, e.g. the chapter name.</summary>
+    [JsonPropertyName("label")]
+
     public string Label { get; set; } = string.Empty;
 
+    [JsonPropertyName("percent")]
+
     public double Percent { get; set; }
+
+    [JsonPropertyName("createdUtc")]
 
     public DateTime CreatedUtc { get; set; }
 }
@@ -32,13 +47,29 @@ public class Bookmark
 /// <summary>Per-user reading settings (only used when the admin allows overrides).</summary>
 public class UserReaderSettings
 {
+    [JsonPropertyName("theme")]
+
     public string? Theme { get; set; }
+    [JsonPropertyName("font")]
+
     public string? Font { get; set; }
+    [JsonPropertyName("fontSize")]
+
     public int? FontSize { get; set; }
+    [JsonPropertyName("lineHeight")]
+
     public double? LineHeight { get; set; }
+    [JsonPropertyName("margins")]
+
     public string? Margins { get; set; }
+    [JsonPropertyName("layout")]
+
     public string? Layout { get; set; }
+    [JsonPropertyName("comicDirection")]
+
     public string? ComicDirection { get; set; }
+    [JsonPropertyName("comicTwoPageSpread")]
+
     public bool? ComicTwoPageSpread { get; set; }
 }
 
@@ -55,7 +86,7 @@ internal class UserFile
 /// </summary>
 public class ProgressStore
 {
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
+    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false, PropertyNameCaseInsensitive = true };
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _locks = new();
 
     private static string FileFor(Guid userId)
