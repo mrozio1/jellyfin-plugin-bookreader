@@ -41,7 +41,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>How many pages to load ahead (higher = smoother, more data).</summary>
     public int PrefetchPages { get; set; } = 3;
 
-    /// <summary>Shrink comic pages to the reader's screen size .</summary>
+    /// <summary>Shrink comic pages to the reader's screen size before sending them.</summary>
     public bool OptimizeComicImages { get; set; } = true;
 
     /// <summary>JPEG quality for resized comic pages (40–95).</summary>

@@ -6,9 +6,9 @@ A reader that lives inside Jellyfin 10.11. It opens EPUB, PDF and comic files qu
 
 | Format | How it works | Needs anything extra? |
 |---|---|---|
-| EPUB, KEPUB | Rendered in the browser with epub.js | No |
+| EPUB, KEPUB | Rendered in the browser with epub.js. Recently opened books are kept on the device, so reopening is instant | No |
 | PDF | pdf.js fetches only the pages being viewed (HTTP range requests), so large PDFs open right away | No |
-| CBZ, CBR, CB7, CBT | Pages are sent one at a time, with a few loaded ahead. RAR/7z comics are unpacked once to a cache so page turns stay instant | No |
+| CBZ, CBR, CB7, CBT | Pages are sent one at a time, resized to the screen, with the next few prepared ahead. RAR/7z comics open straight away and unpack in the background | No |
 | MOBI, AZW, AZW3, FB2, LIT, PDB, DOCX, RTF, TXT, HTMLZ… | Converted to EPUB on first open, then cached | [Calibre](https://calibre-ebook.com) on the server |
 | DjVu | Converted to PDF on first open, then cached | DjVuLibre (`ddjvu`) on the server |
 
@@ -25,6 +25,32 @@ DRM-protected books (Kindle store, Adobe DRM) can't be opened. That limit applie
 - **Navigation:** chapter marks on the progress bar; tap, swipe, keyboard and TV remote (arrow keys + Enter)
 - **Offline-friendly:** all libraries and fonts are bundled, so nothing loads from the internet
 - **Integration:** a **Read** button on book pages. Optionally, the Play button opens books here instead of Jellyfin's built-in viewer
+
+## Speed
+
+The `Speed test` workflow runs the plugin inside a real Jellyfin 10.11 server with large sample books. It measures each one on a fast home network and on a simulated phone away from home (80 ms round trip, 25 Mbit/s). Results for 1.1 on the phone connection:
+
+| Book | 1.0 first open | 1.1 first open | 1.1 reopen |
+|---|---|---|---|
+| 200-page scanned PDF (50 MB) | 17.8 s | 2.3 s (1.4 MB downloaded) | 0.4 s |
+| Illustrated EPUB (7 MB) | 3.6 s | 3.3 s | 0.3 s |
+| 120-page CBZ comic (107 MB) | 1.1 s | 0.7 s | 0.2 s |
+| 120-page 7z comic (105 MB) | 7.6 s before the server responded | 0.7 s | 0.2 s |
+
+Comic page turns on the phone connection went from 0.3–1 s to under 0.1 s, because pages are sent at screen size (about 110 KB instead of 900 KB).
+
+### How it stays fast
+
+- **Comics:** pages are resized for the screen using Jellyfin's own image encoder, then kept in a cache. The cache size is set on the plugin page; books opened least recently are removed first. RAR, 7z and TAR archives are indexed instantly and unpacked in the background in reading order.
+- **PDF:** only the parts of the file needed for the pages on screen are fetched. Book files are sent with `Cache-Control: no-transform` so the server and proxies don't compress them, since compression would force a full download. The bundled pdf.js worker has a small patch (marked `[Book Reader patch]`) so pages in flat page lists, which are common in scanned PDFs, are found directly. Without it, pdf.js reads every page before showing the first.
+- **EPUB:** the book downloads at the same time as the reader code. Each book's page map, used for the progress bar, is measured once and shared by every user and device.
+- **Reader files:** compressed once and cached by browsers for a year. Links are versioned, so updates apply immediately.
+
+### If books are still slow
+
+- **Behind a reverse proxy** (Nginx Proxy Manager, Caddy, Traefik): make sure it doesn't buffer or compress `/BookReader/Books/` responses. With Nginx, add `proxy_buffering off;` for that path.
+- **A comic is slow only the first time:** that's the server preparing pages. Later opens use the cache.
+- **Jumping to the end of a large RAR or 7z comic the first time:** this waits until unpacking reaches that page. Solid archives must be unpacked in order.
 
 ## Install (easiest: from Jellyfin's catalog)
 
@@ -96,6 +122,6 @@ The reader bundles the following, each under its own license (see `Web/lib` and 
 
 - epub.js (BSD-2-Clause)
 - JSZip (MIT)
-- pdf.js (Apache-2.0)
+- pdf.js (Apache-2.0; the worker is modified as described under Speed)
 - Literata and Atkinson Hyperlegible (SIL Open Font License)
 - SharpCompress (MIT)
