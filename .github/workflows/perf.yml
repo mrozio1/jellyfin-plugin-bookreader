@@ -1,0 +1,72 @@
+name: Speed test
+
+# Runs the plugin inside a real Jellyfin 10.11 server (Docker) with large
+# sample books and measures load and page-turn times. Runs on every branch
+# except main, and can be started by hand from the Actions tab.
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+jobs:
+  speed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build plugin
+        run: dotnet publish Jellyfin.Plugin.BookReader/Jellyfin.Plugin.BookReader.csproj -c Release -o out
+
+      - name: Pick newest Jellyfin 10.11 image
+        id: img
+        run: |
+          TAG=$(curl -s "https://hub.docker.com/v2/repositories/jellyfin/jellyfin/tags?page_size=100&name=10.11." \
+            | python3 -c "import json,sys; t=[r['name'] for r in json.load(sys.stdin)['results'] if r['name'].count('.')==2 and r['name'].replace('.','').isdigit()]; t.sort(key=lambda s:[int(x) for x in s.split('.')]); print(t[-1] if t else '10.11')")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using jellyfin/jellyfin:$TAG"
+          docker pull "jellyfin/jellyfin:$TAG"
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full iproute2 > /dev/null
+          pip install -q pillow reportlab playwright
+          python -m playwright install --with-deps chromium > /dev/null
+
+      - name: Make sample books
+        run: python tests/perf/make_books.py "$RUNNER_TEMP/books"
+
+      - name: Start Jellyfin with the plugin
+        run: |
+          mkdir -p "$RUNNER_TEMP/jf/config/plugins/BookReader_1.0.0.0" "$RUNNER_TEMP/jf/cache"
+          cp out/Jellyfin.Plugin.BookReader.dll out/SharpCompress.dll "$RUNNER_TEMP/jf/config/plugins/BookReader_1.0.0.0/"
+          cp out/ZstdSharp.dll "$RUNNER_TEMP/jf/config/plugins/BookReader_1.0.0.0/" 2>/dev/null || true
+          docker run -d --name jf -p 8096:8096 \
+            -v "$RUNNER_TEMP/jf/config:/config" -v "$RUNNER_TEMP/jf/cache:/cache" \
+            -v "$RUNNER_TEMP/books:/media/books:ro" \
+            "jellyfin/jellyfin:${{ steps.img.outputs.tag }}"
+
+      - name: Run speed test
+        run: |
+          cd tests/perf
+          python run.py "$RUNNER_TEMP/books"
+          cat results.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Jellyfin log (plugin lines and errors)
+        if: always()
+        run: docker logs jf 2>&1 | grep -iE "bookreader|book reader|\[ERR\]|exception" | tail -80 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: speed-results
+          path: tests/perf/results.*
