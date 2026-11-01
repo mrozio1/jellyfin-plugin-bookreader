@@ -102,6 +102,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   font-variant-numeric: tabular-nums; min-height: 1.3em;
 }
 
+/* Zoom buttons: A−/A+ for text, magnifiers for page images */
+.zoom-group { display: flex; }
+.zoom-group .for-text { font: 700 17px/1 var(--book-font); }
+.zoom-group .for-text small { font: 700 13px var(--ui-font); margin-left: 1px; }
+#app:not(.mode-epub) .zoom-group .for-text, #app.mode-epub .zoom-group .for-image { display: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 /* ---------- The page ---------- */
 .stage {
   position: absolute; z-index: 2; left: 0; right: 0;
@@ -153,8 +160,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #app:not(.mode-epub) .sheet { background: transparent; box-shadow: none; width: calc(100% - 32px); top: 6px; bottom: 14px; }
 .page-single {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  padding: 0 12px 0 0; overflow: hidden;
+  padding: 0 12px 0 0; overflow: hidden; touch-action: none;
 }
+#app.zoomed .turn-zone { pointer-events: none; }
+#app.zoomed .page-single { cursor: grab; }
+.spread.gesture { transition: none; }
 .spread {
   display: inline-flex; position: relative; border-radius: 2px 5px 5px 2px;
   transform-origin: 0 0; transition: transform .35s var(--ease);
@@ -388,6 +398,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .sheet-grip { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 6px auto 2px; }
   .sheet { width: calc(100% - 40px); }
   .running-head { padding-left: 24px; padding-right: 24px; }
+}
+/* Narrow phones: make room for the title next to the zoom buttons */
+@media (max-width: 480px) {
+  #btn-fullscreen { display: none; }
+  .desk-head { padding-right: 4px; gap: 0; }
 }
 /* Short screens (landscape phones): smaller desk margins */
 @media (max-height: 560px) {

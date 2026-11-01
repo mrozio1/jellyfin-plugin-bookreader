@@ -296,6 +296,37 @@ async def feature_tests(browser, token, books):
     f["panel_errors"] = errors
     await ctx.close()
 
+    # Zoom: pinch a comic page (magnifies) and a book page (bigger text).
+    async def pinch(cdp, cx, cy, d0, d1, steps=8):
+        pts = lambda d: [{"x": cx - d / 2, "y": cy, "id": 1}, {"x": cx + d / 2, "y": cy, "id": 2}]
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": pts(d0)})
+        for i in range(1, steps + 1):
+            await cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": pts(d0 + (d1 - d0) * i / steps)})
+            await asyncio.sleep(0.02)
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+    comic = next(i for n, i in books.items() if n == "Big Comic.cbz")
+    for label, item in (("comic", comic), ("book", epub)):
+        ctx = await browser.new_context(viewport=phone, device_scale_factor=2, has_touch=True, is_mobile=True)
+        page = await ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(f"js: {e}"))
+        await page.goto(f"{BASE}/BookReader/Reader?id={item}#t={token}")
+        await page.wait_for_function(READY_JS, timeout=120000, polling=50)
+        await page.wait_for_timeout(800)
+        cdp = await ctx.new_cdp_session(page)
+        size_before = await page.inner_text("#size-out")
+        await pinch(cdp, 206, 440, 80, 240)
+        await page.wait_for_timeout(1500)
+        if label == "comic":
+            f["comic_pinch_transform"] = await page.evaluate("document.querySelector('.spread').style.transform")
+            f["comic_sharper_width"] = await page.evaluate("document.querySelector('.spread img').dataset.w")
+        else:
+            f["book_text_size_before_after"] = [size_before, await page.inner_text("#size-out")]
+        await page.screenshot(path=os.path.join(SHOTS, f"phone-zoom-{label}.png"))
+        f[f"zoom_{label}_errors"] = errors
+        await ctx.close()
+
     # Desktop: two-page book spread and comic spread.
     for name, item in books.items():
         if name.endswith(".epub") or name.endswith(".cbz") and not name.startswith("Panel"):

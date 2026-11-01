@@ -24,6 +24,18 @@
       <button class="icon-btn comic-only" id="btn-comic-settings" aria-label="Reading settings" title="Reading settings (S)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4M12 7h8M4 17h10M18 17h2"/><circle cx="10" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>
       </button>
+      <div class="zoom-group" role="group" aria-label="Zoom">
+        <button class="icon-btn" id="btn-zoom-out" title="Smaller (−)">
+          <span class="for-text" aria-hidden="true">A<small>−</small></span>
+          <svg class="for-image" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20M7.5 10.5h6"/></svg>
+          <span class="sr-only" id="zoom-out-label">Smaller text</span>
+        </button>
+        <button class="icon-btn" id="btn-zoom-in" title="Bigger (+)">
+          <span class="for-text" aria-hidden="true">A<small>+</small></span>
+          <svg class="for-image" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20M7.5 10.5h6M10.5 7.5v6"/></svg>
+          <span class="sr-only" id="zoom-in-label">Bigger text</span>
+        </button>
+      </div>
       <button class="icon-btn" id="btn-fullscreen" aria-label="Full screen" title="Full screen (F)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
       </button>

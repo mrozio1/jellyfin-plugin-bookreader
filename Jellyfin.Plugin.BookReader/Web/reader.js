@@ -106,6 +106,15 @@ async function boot() {
 
   state.info = info;
   app.classList.add(`mode-${info.kind}`);
+  if (info.kind !== 'epub') {
+    $('zoom-in-label').textContent = 'Zoom in';
+    $('zoom-out-label').textContent = 'Zoom out';
+    $('btn-zoom-in').title = 'Zoom in (+)';
+    $('btn-zoom-out').title = 'Zoom out (−)';
+  } else {
+    $('btn-zoom-in').title = 'Bigger text (+)';
+    $('btn-zoom-out').title = 'Smaller text (−)';
+  }
   if (info.kind === 'comic') {
     $('toc-label').textContent = 'Pages';
     $('toc-title').textContent = 'Pages';
@@ -205,8 +214,10 @@ class EpubEngine {
     doc.addEventListener('touchstart', (e) => {
       const t = e.changedTouches[0]; sx = t.screenX; sy = t.screenY; st = Date.now();
     }, { passive: true });
+    wireTextPinch(doc);
     doc.addEventListener('touchend', (e) => {
-      if (state.settings.layout === 'scrolled') return;
+      if (state.settings.layout === 'scrolled' || e.touches.length) return;
+      if (doc.__pinchedAt && Date.now() - doc.__pinchedAt < 500) return;
       const t = e.changedTouches[0];
       const dx = t.screenX - sx, dy = t.screenY - sy;
       if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - st < 700) {
@@ -240,6 +251,7 @@ class EpubEngine {
       p, li, h1, h2, h3, h4, h5, h6, blockquote, span, div { color: inherit !important; }
       a, a:visited { color: ${accent} !important; }
       img, svg, video { max-width: 100% !important; height: auto; }
+      h1, h2, h3, h4, h5, h6 { overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; }
       ${s.font !== 'publisher' ? 'p { text-align: justify; -webkit-hyphens: auto; hyphens: auto; }' : ''}
       /* Scene breaks set like a printed book */
       hr { border: 0 !important; height: auto !important; margin: 1.2em 0 !important; text-align: center; overflow: visible; background: none !important; }
@@ -478,7 +490,8 @@ class PdfEngine {
     const cssWidth = Math.min(maxW, maxH / this.aspect);
     slot.style.width = `${Math.floor(cssWidth)}px`;
     slot.style.height = `${Math.floor(cssWidth * this.aspect)}px`;
-    this.wrap.replaceChildren(paperSpread([slot]));
+    this.spread = paperSpread([slot]);
+    this.wrap.replaceChildren(this.spread);
     const canvas = await this.renderToCanvas(n, maxW, maxH);
     if (this.page !== n || !canvas) return;
     slot.classList.remove('placeholder');
@@ -489,6 +502,21 @@ class PdfEngine {
     if (n < this.count) this.renderToCanvas(n + 1, maxW, maxH);
     if (n > 1) this.renderToCanvas(n - 1, maxW, maxH);
     if (n + 2 <= this.count) this.doc.getPage(n + 2).catch(() => {}); // fetch its data only
+  }
+
+  /** Re-draws the page at a higher resolution while it's magnified. */
+  async sharpen(scale) {
+    const el = this.spread;
+    const slot = el?.querySelector('.page-slot:not(.placeholder)');
+    if (!slot || scale <= (Number(el.dataset.sharp) || 1) + 0.2) return;
+    el.dataset.sharp = String(scale);
+    const n = this.page;
+    const { w, h } = pageArea();
+    const canvas = await this.paint(n, w * scale, h * scale);
+    if (!canvas || this.spread !== el || this.page !== n) return;
+    canvas.style.width = slot.style.width;
+    canvas.style.height = slot.style.height;
+    slot.replaceChildren(canvas);
   }
 
   isShowing(location) { return Number(location) === this.page; }
@@ -733,6 +761,8 @@ class ComicEngine {
         const img = new Image();
         img.decoding = 'async';
         img.alt = `Page ${p + 1}`;
+        img.dataset.page = String(p);
+        img.dataset.w = String(this.pageWidth());
         img.src = url;
         await img.decode().catch(() => {});
         if (this.showing !== group) return;
@@ -853,6 +883,22 @@ class ComicEngine {
       return;
     }
     if (this.page > 0) this.goTo(this.groupFor(this.page - 1)[0]);
+  }
+
+  /** Swaps in a higher-resolution copy of the page(s) while magnified. */
+  sharpen(scale) {
+    const el = this.spread;
+    if (!el || this.panelMode) return;
+    const want = [720, 1080, 1440, 1920, 2560].find((w) => this.pageWidth() * scale <= w) || 2560;
+    el.querySelectorAll('img[data-page]').forEach((img) => {
+      if (Number(img.dataset.w) >= want) return;
+      img.dataset.w = String(want);
+      fetchComicPage(Number(img.dataset.page), want).then((url) => {
+        const hi = new Image();
+        hi.onload = () => { if (this.spread === el) img.src = url; };
+        hi.src = url;
+      }).catch(() => {});
+    });
   }
 
   // ---- Panel by panel ----
@@ -1087,6 +1133,7 @@ function pageArea() {
 
 /** Wraps page slots in a sheet of paper with the page-edge stack behind it. */
 function paperSpread(slots) {
+  resetZoomState();
   const spread = document.createElement('div');
   spread.className = 'spread paper-stack';
   spread.append(...slots);
@@ -1236,6 +1283,263 @@ function markPageGrid(shown) {
 }
 
 // ------------------------------------------------------------------
+// Zoom: pinch, double-tap, buttons, Ctrl+scroll and +/− keys.
+// Comics and PDFs magnify the page; books change the text size instead.
+// ------------------------------------------------------------------
+const zoom = { s: 1, x: 0, y: 0, el: null, chromeTimer: 0, suppressClickUntil: 0, lastTap: null, sharpTimer: 0 };
+const TEXT_MIN = 70, TEXT_MAX = 250;
+
+/** The page being magnified, or null where zooming the image doesn't apply. */
+function zoomEl() {
+  const e = state.engine;
+  if (!e || e instanceof EpubEngine || e.panelMode) return null;
+  if (app.classList.contains('mode-scrolled') || app.classList.contains('mode-vertical')) return null;
+  return e.spread && e.spread.isConnected ? e.spread : null;
+}
+
+/** Forget any zoom; called whenever a new page is put on the desk. */
+function resetZoomState() {
+  zoom.s = 1; zoom.x = 0; zoom.y = 0; zoom.el = null;
+  app.classList.remove('zoomed');
+}
+
+function zoomFrame(el) {
+  const frame = el.parentElement.getBoundingClientRect();
+  return { frame, ox: frame.left + el.offsetLeft, oy: frame.top + el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+/** Keeps a magnified page covering the screen, and a page that fits centred. */
+function clampZoom(el) {
+  const { frame, ox, oy, w, h } = zoomFrame(el);
+  const cw = w * zoom.s, ch = h * zoom.s;
+  zoom.x = cw <= frame.width ? frame.left + (frame.width - cw) / 2 - ox : clamp(zoom.x, frame.right - cw - ox, frame.left - ox);
+  zoom.y = ch <= frame.height ? frame.top + (frame.height - ch) / 2 - oy : clamp(zoom.y, frame.bottom - ch - oy, frame.top - oy);
+  if (zoom.s <= 1.001) { zoom.s = 1; zoom.x = 0; zoom.y = 0; }
+}
+
+function applyZoom(el) {
+  zoom.el = el;
+  clampZoom(el);
+  el.style.transform = zoom.s === 1 ? '' : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+  app.classList.toggle('zoomed', zoom.s > 1);
+  // Once the zoom settles, load a sharper copy of the page for the bigger size.
+  clearTimeout(zoom.sharpTimer);
+  if (zoom.s > 1.2) zoom.sharpTimer = setTimeout(() => state.engine?.sharpen?.(zoom.s), 300);
+}
+
+/** Zooms to scale s, keeping the point (cx, cy) on screen under the finger or cursor. */
+function zoomAt(s, cx, cy, el = zoomEl()) {
+  if (!el) return;
+  if (zoom.el !== el) resetZoomState();
+  const { ox, oy } = zoomFrame(el);
+  const px = (cx - ox - zoom.x) / zoom.s, py = (cy - oy - zoom.y) / zoom.s;
+  zoom.s = clamp(s, 1, 5);
+  zoom.x = cx - ox - px * zoom.s;
+  zoom.y = cy - oy - py * zoom.s;
+  applyZoom(el);
+}
+
+function snapTextSize(size) { return clamp(Math.round(size / 5) * 5, TEXT_MIN, TEXT_MAX); }
+
+/** Changes book text size on the fly (kept for this reader unless the admin has locked the style). */
+function setTextSize(size) {
+  size = snapTextSize(size);
+  if (size === state.settings.fontSize) { toast(`Text size ${size}%`); return; }
+  if (state.config.allowUserOverrides) {
+    changeSetting('fontSize', size);
+  } else {
+    state.settings.fontSize = size;
+    syncSettingsUi();
+    state.engine?.settingsChanged('fontSize');
+  }
+  toast(`Text size ${size}%`);
+}
+
+/** Zoom buttons and +/− keys: dir is +1 (bigger) or −1 (smaller). */
+function zoomStep(dir) {
+  const engine = state.engine;
+  if (!engine) return;
+  if (engine instanceof EpubEngine) { setTextSize(state.settings.fontSize + dir * 10); return; }
+  if (engine.panelMode) { engine.exitPanels(); return; }
+  const el = zoomEl();
+  if (!el) { toast('Zoom works in page view. Switch Page turning to Pages in settings.'); return; }
+  const r = el.parentElement.getBoundingClientRect();
+  zoomAt(dir > 0 ? zoom.s * 1.5 : zoom.s / 1.5, r.left + r.width / 2, r.top + r.height / 2, el);
+}
+
+function resetZoom() {
+  const el = zoomEl();
+  if (el && zoom.s > 1) { zoom.s = 1; applyZoom(el); }
+}
+
+const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+/** Pinch, pan, double-tap and swipe on comic and PDF pages. */
+function wireGestures() {
+  const stage = $('stage');
+  let g = null;
+
+  const startPan = (t, el) => ({ type: 'one', sx: t.clientX, sy: t.clientY, st: Date.now(), x0: zoom.x, y0: zoom.y, moved: false, el });
+
+  stage.addEventListener('touchstart', (e) => {
+    if (state.info?.kind === 'epub') return;
+    const el = zoomEl();
+    if (el && zoom.el !== el) resetZoomState();
+    if (e.touches.length === 2 && el) {
+      const [a, b] = e.touches;
+      const m = mid(a, b);
+      const { ox, oy } = zoomFrame(el);
+      g = { type: 'pinch', el, d0: dist(a, b), s0: zoom.s, px: (m.x - ox - zoom.x) / zoom.s, py: (m.y - oy - zoom.y) / zoom.s };
+      el.classList.add('gesture');
+      clearTimeout(zoom.chromeTimer);
+      e.preventDefault();
+    } else if (e.touches.length === 1) {
+      g = startPan(e.touches[0], el);
+      if (el && zoom.s > 1) el.classList.add('gesture');
+    }
+  }, { passive: false });
+
+  stage.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    if (g.type === 'pinch' && e.touches.length >= 2) {
+      const [a, b] = e.touches;
+      const m = mid(a, b);
+      const { ox, oy } = zoomFrame(g.el);
+      zoom.s = clamp(g.s0 * (dist(a, b) / g.d0), 1, 5);
+      zoom.x = m.x - ox - g.px * zoom.s;
+      zoom.y = m.y - oy - g.py * zoom.s;
+      applyZoom(g.el);
+      e.preventDefault();
+    } else if (g.type === 'one') {
+      const t = e.touches[0];
+      const dx = t.clientX - g.sx, dy = t.clientY - g.sy;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) g.moved = true;
+      if (g.el && zoom.s > 1) {
+        zoom.x = g.x0 + dx; zoom.y = g.y0 + dy;
+        applyZoom(g.el);
+        e.preventDefault();
+      }
+    }
+  }, { passive: false });
+
+  stage.addEventListener('touchend', (e) => {
+    if (!g) return;
+    if (e.touches.length === 1 && g.type === 'pinch') { g = startPan(e.touches[0], g.el); g.moved = true; return; }
+    if (e.touches.length) return;
+    const gesture = g;
+    g = null;
+    gesture.el?.classList.remove('gesture');
+    if (gesture.type === 'pinch') {
+      zoom.suppressClickUntil = Date.now() + 400;
+      if (zoom.s < 1.08) { zoom.s = 1; applyZoom(gesture.el); }
+      return;
+    }
+    const t = e.changedTouches[0];
+    const dx = t.clientX - gesture.sx, dy = t.clientY - gesture.sy;
+    const quick = Date.now() - gesture.st < 300;
+    if (!gesture.moved && quick) {
+      // Double-tap: magnify around the tap, or back to the whole page.
+      const last = zoom.lastTap;
+      if (last && Date.now() - last.time < 320 && Math.hypot(t.clientX - last.x, t.clientY - last.y) < 40 && zoomEl()) {
+        zoom.lastTap = null;
+        clearTimeout(zoom.chromeTimer);
+        zoom.suppressClickUntil = Date.now() + 400;
+        zoomAt(zoom.s > 1 ? 1 : 2.5, t.clientX, t.clientY);
+        e.preventDefault();
+        return;
+      }
+      zoom.lastTap = { time: Date.now(), x: t.clientX, y: t.clientY };
+      return;
+    }
+    if (zoom.s > 1) return; // that was a pan, not a page turn
+    if (app.classList.contains('mode-scrolled') || app.classList.contains('mode-vertical')) return;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - gesture.st < 700) turn(dx < 0 ? 1 : -1);
+  }, { passive: false });
+
+  // Tap the middle of a comic or PDF page to hide the desk controls (waits a moment in case it's a double-tap).
+  stage.addEventListener('click', (e) => {
+    if (e.target.closest('.turn-zone')) return;
+    if (state.info?.kind === 'epub' || Date.now() < zoom.suppressClickUntil || zoom.s > 1) return;
+    clearTimeout(zoom.chromeTimer);
+    zoom.chromeTimer = setTimeout(toggleChrome, 330);
+  });
+  stage.addEventListener('dblclick', (e) => {
+    if (!zoomEl()) return;
+    clearTimeout(zoom.chromeTimer);
+    zoomAt(zoom.s > 1 ? 1 : 2.5, e.clientX, e.clientY);
+  });
+
+  // Desktop: Ctrl + scroll to zoom (trackpad pinch arrives this way too), drag to move around.
+  stage.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    if (state.info?.kind === 'epub') { wheelText(e.deltaY); return; }
+    zoomAt(zoom.s * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+  }, { passive: false });
+  let drag = null;
+  stage.addEventListener('mousedown', (e) => {
+    const el = zoomEl();
+    if (!el || zoom.s <= 1 || e.button !== 0) return;
+    drag = { sx: e.clientX, sy: e.clientY, x0: zoom.x, y0: zoom.y, el, moved: false };
+    el.classList.add('gesture');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    zoom.x = drag.x0 + e.clientX - drag.sx; zoom.y = drag.y0 + e.clientY - drag.sy;
+    if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 4) drag.moved = true;
+    applyZoom(drag.el);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!drag) return;
+    drag.el.classList.remove('gesture');
+    if (drag.moved) zoom.suppressClickUntil = Date.now() + 300;
+    drag = null;
+  });
+
+  // Stop the browser zooming the whole screen (Safari pinch gestures).
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
+}
+
+/** Ctrl + scroll over a book: one step per notch, not per pixel. */
+let wheelBudget = 0;
+function wheelText(deltaY) {
+  wheelBudget += deltaY;
+  if (Math.abs(wheelBudget) < 40) return;
+  const dir = wheelBudget < 0 ? 1 : -1;
+  wheelBudget = 0;
+  setTextSize(state.settings.fontSize + dir * 10);
+}
+
+/** Pinch inside a book page: bigger or smaller text, applied when the fingers lift. */
+function wireTextPinch(doc) {
+  let p = null;
+  doc.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) p = { d0: dist(e.touches[0], e.touches[1]), size0: state.settings.fontSize, size: null };
+  }, { passive: true });
+  doc.addEventListener('touchmove', (e) => {
+    if (!p || e.touches.length < 2) return;
+    e.preventDefault();
+    const size = snapTextSize(p.size0 * (dist(e.touches[0], e.touches[1]) / p.d0));
+    if (size !== p.size) { p.size = size; toast(`Text size ${size}%`); }
+  }, { passive: false });
+  doc.addEventListener('touchend', (e) => {
+    if (!p || e.touches.length) return;
+    const size = p.size;
+    p = null;
+    doc.__pinchedAt = Date.now();
+    if (size && size !== state.settings.fontSize) setTextSize(size);
+  });
+  doc.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    wheelText(e.deltaY);
+  }, { passive: false });
+  doc.addEventListener('gesturestart', (e) => e.preventDefault());
+}
+
+// ------------------------------------------------------------------
 // Interface wiring
 // ------------------------------------------------------------------
 let dragging = false;
@@ -1260,24 +1564,9 @@ function wireUi() {
   $('zone-prev').addEventListener('click', () => turn(-1));
   $('zone-next').addEventListener('click', () => turn(1));
 
-  // Tap the middle of a comic or PDF page to hide the desk controls and use the whole screen.
-  const stage = $('stage');
-  stage.addEventListener('click', (e) => {
-    if (e.target.closest('.turn-zone')) return;
-    if (state.info?.kind !== 'epub') toggleChrome();
-  });
-
-  // Swipe on PDF / comic pages.
-  let sx = 0, sy = 0, st = 0;
-  stage.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; st = Date.now(); }, { passive: true });
-  stage.addEventListener('touchend', (e) => {
-    if (state.info?.kind === 'epub' || app.classList.contains('mode-scrolled') || app.classList.contains('mode-vertical')) return;
-    if (e.touches.length) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - sx, dy = t.clientY - sy;
-    if (window.visualViewport && window.visualViewport.scale > 1.05) return; // user is zoomed in
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - st < 700) turn(dx < 0 ? 1 : -1);
-  }, { passive: true });
+  wireGestures();
+  $('btn-zoom-in').addEventListener('click', () => zoomStep(1));
+  $('btn-zoom-out').addEventListener('click', () => zoomStep(-1));
 
   // "Jump to" slider in the Contents / Pages drawer
   const seek = $('seek');
@@ -1304,8 +1593,8 @@ function wireUi() {
       changeSetting(group.dataset.setting, v);
     });
   });
-  $('size-down').addEventListener('click', () => changeSetting('fontSize', clamp(state.settings.fontSize - 10, 70, 220)));
-  $('size-up').addEventListener('click', () => changeSetting('fontSize', clamp(state.settings.fontSize + 10, 70, 220)));
+  $('size-down').addEventListener('click', () => changeSetting('fontSize', snapTextSize(state.settings.fontSize - 10)));
+  $('size-up').addEventListener('click', () => changeSetting('fontSize', snapTextSize(state.settings.fontSize + 10)));
   $('spread-toggle').addEventListener('change', (e) => changeSetting('comicTwoPageSpread', e.target.checked));
 
   let resizeTimer = 0;
@@ -1333,9 +1622,13 @@ function onKey(e) {
     case 'b': case 'B': if (!panelOpen) toggleBookmark(); break;
     case 'p': case 'P': if (!panelOpen) state.engine?.togglePanels?.(); break;
     case 'f': case 'F': toggleFullscreen(); break;
+    case '+': case '=': if (!panelOpen) { zoomStep(1); e.preventDefault?.(); } break;
+    case '-': case '_': if (!panelOpen) { zoomStep(-1); e.preventDefault?.(); } break;
+    case '0': if (!panelOpen) { resetZoom(); e.preventDefault?.(); } break;
     case 'Enter': if (!panelOpen && document.activeElement === document.body) toggleChrome(); break;
     case 'Escape':
       if (panelOpen) closePanels();
+      else if (zoom.s > 1) resetZoom();
       else if (state.engine?.panelMode) state.engine.togglePanels();
       else closeBook();
       break;
