@@ -355,7 +355,7 @@ class PdfEngine {
   async open(saved) {
     setLoading('Opening your book');
     const pdfjs = await import(asset('lib/pdf.min.mjs'));
-    pdfjs.GlobalWorkerOptions.workerSrc = asset('lib/pdf.worker.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = asset('lib/pdf.worker.mjs');
     this.doc = await pdfjs.getDocument({
       url: `${location.origin}${API}/BookReader/Books/${itemId}/File`,
       httpHeaders: { Authorization: AUTH },

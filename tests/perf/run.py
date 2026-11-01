@@ -107,7 +107,7 @@ def http_tests(token, books):
     enc = {"Accept-Encoding": "gzip, br"}
     s, c, h, ms = call("GET", "/BookReader/Reader", headers=enc)
     out["reader_page"] = {"status": s, "ms": ms, "bytes": len(c)}
-    for asset in ["reader.js", "reader.css", "lib/epub.min.js", "lib/pdf.min.mjs", "lib/pdf.worker.min.mjs", "fonts/literata-400-normal.woff2"]:
+    for asset in ["reader.js", "reader.css", "lib/epub.min.js", "lib/pdf.min.mjs", "lib/pdf.worker.mjs", "fonts/literata-400-normal.woff2"]:
         s, c, h, ms = call("GET", f"/BookReader/Assets/{asset}", headers=enc)
         etag = h.get("ETag")
         s2, _, _, ms2 = call("GET", f"/BookReader/Assets/{asset}", headers={**enc, **({"If-None-Match": etag} if etag else {})})
