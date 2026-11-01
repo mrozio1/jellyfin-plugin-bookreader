@@ -167,14 +167,25 @@ async def open_book(browser, token, item, turns=6):
     page.on("pageerror", lambda e: errors.append(f"js: {e}"))
     page.on("response", lambda r: errors.append(f"http {r.status} {r.url.split('?')[0][-60:]}") if r.status >= 400 else None)
     result = {}
+    sizes = []
+
+    async def track(req):
+        try:
+            sizes.append((await req.sizes())["responseBodySize"])
+        except Exception:
+            pass
+    ctx.on("requestfinished", lambda req: asyncio.ensure_future(track(req)))
     try:
         for attempt in ("first_open", "reopen"):
             await page.goto("about:blank")
+            sizes.clear()
             t = time.perf_counter()
             await page.goto(f"{BASE}/BookReader/Reader?id={item}#t={token}")
             try:
                 await page.wait_for_function(READY_JS, timeout=180000, polling=50)
                 result[attempt + "_ms"] = round((time.perf_counter() - t) * 1000)
+                await asyncio.sleep(0.3)
+                result[attempt + "_mb"] = round(sum(sizes) / 1e6, 2)
             except Exception:
                 result[attempt + "_ms"] = None
                 result["stuck_on"] = await page.evaluate("document.getElementById('veil-text')?.textContent")
@@ -217,13 +228,13 @@ async def browser_tests(token, books):
 def summary():
     lines = [f"## Book Reader speed test (Jellyfin {RESULTS.get('jellyfin')})", ""]
     lines += ["### In the browser (412×915 phone screen)", "",
-              "| Book | Network | First open | Reopen | Page turns (ms) | Problems |", "|---|---|---|---|---|---|"]
+              "| Book | Network | First open | Downloaded | Reopen | Page turns (ms) | Problems |", "|---|---|---|---|---|---|---|"]
     for name, nets in RESULTS["browser"].items():
         for net, r in nets.items():
             fmt = lambda v: "**stuck**" if v is None else f"{v / 1000:.1f}s"
             turns = ", ".join("—" if x is None else str(x) for x in r.get("page_turn_ms", []))
             probs = "; ".join(r.get("errors", [])) + (f" stuck on: {r['stuck_on']}" if r.get("stuck_on") else "")
-            lines.append(f"| {name} | {net.replace('_', ' ')} | {fmt(r.get('first_open_ms'))} | {fmt(r.get('reopen_ms')) if 'reopen_ms' in r else '—'} | {turns} | {probs or 'none'} |")
+            lines.append(f"| {name} | {net.replace('_', ' ')} | {fmt(r.get('first_open_ms'))} | {r.get('first_open_mb', '—')} MB | {fmt(r.get('reopen_ms')) if 'reopen_ms' in r else '—'} | {turns} | {probs or 'none'} |")
     lines += ["", "### Server", "", "```json", json.dumps(RESULTS["http"], indent=1), "```"]
     return "\n".join(lines)
 

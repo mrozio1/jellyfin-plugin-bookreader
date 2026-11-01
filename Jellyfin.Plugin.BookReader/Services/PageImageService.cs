@@ -6,10 +6,11 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.BookReader.Services;
 
 /// <summary>
-/// Shrinks comic pages to the size of the reader's screen and re-encodes them as
-/// WebP, using Jellyfin's own image encoder. A 3 MB scan typically becomes
-/// 200–400 KB, which is what makes comics fast away from home. Results are cached
-/// on disk, so each page is only processed once per screen size.
+/// Shrinks comic pages to the size of the reader's screen using Jellyfin's own
+/// image encoder. A 3 MB scan typically becomes a few hundred KB, which is what
+/// makes comics fast away from home. JPEG is used rather than WebP because it
+/// encodes several times faster, which matters on NAS-class CPUs. Results are
+/// cached on disk, so each page is only processed once per screen size.
 /// </summary>
 public class PageImageService
 {
@@ -50,7 +51,7 @@ public class PageImageService
         return Widths[^1];
     }
 
-    /// <summary>Path to a resized WebP of the page, or null to serve the original.</summary>
+    /// <summary>Path to a resized copy of the page, or null to serve the original.</summary>
     public async Task<string?> GetAsync(ComicBook book, int index, int width, CancellationToken ct)
     {
         var cfg = Plugin.Instance!.Configuration;
@@ -60,7 +61,7 @@ public class PageImageService
         }
 
         var dir = Path.Combine(book.CacheFolder, "w" + width);
-        var output = Path.Combine(dir, index.ToString("D5") + ".webp");
+        var output = Path.Combine(dir, index.ToString("D5") + ".jpg");
         var keepOriginal = output + ".orig";
         if (File.Exists(output))
         {
@@ -80,6 +81,30 @@ public class PageImageService
         }));
 
         return await job.Value.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Prepares the next few pages in the background (already-done pages are skipped).</summary>
+    public void PrepareAhead(ComicBook book, int from, int count, int width)
+    {
+        if (!Plugin.Instance!.Configuration.OptimizeComicImages || !_encoder.SupportsImageEncoding)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            for (var i = from; i < Math.Min(book.Pages.Count, from + count); i++)
+            {
+                try
+                {
+                    await GetAsync(book, i, width, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    return; // logged by GetAsync; stop warming this book
+                }
+            }
+        });
     }
 
     private async Task<string?> EncodeAsync(ComicBook book, int index, int width, string dir, string output, string keepOriginal)
@@ -122,15 +147,15 @@ public class PageImageService
             }
 
             var quality = Math.Clamp(Plugin.Instance!.Configuration.ComicImageQuality, 40, 95);
-            var partial = Path.Combine(dir, $".out-{index}-{Guid.NewGuid():N}.webp");
+            var partial = Path.Combine(dir, $".out-{index}-{Guid.NewGuid():N}.jpg");
             var options = new ImageProcessingOptions
             {
                 MaxWidth = width,
                 Quality = quality,
-                SupportedOutputFormats = new[] { ImageFormat.Webp }
+                SupportedOutputFormats = new[] { ImageFormat.Jpg }
             };
 
-            var result = _encoder.EncodeImage(input, File.GetLastWriteTimeUtc(input), partial, false, null, quality, options, ImageFormat.Webp);
+            var result = _encoder.EncodeImage(input, File.GetLastWriteTimeUtc(input), partial, false, null, quality, options, ImageFormat.Jpg);
             if (!string.Equals(result, partial, StringComparison.Ordinal) || !File.Exists(partial))
             {
                 MarkKeepOriginal(keepOriginal);

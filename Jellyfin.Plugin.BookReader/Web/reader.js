@@ -141,9 +141,8 @@ class EpubEngine {
   async open(saved) {
     setLoading('Opening your book');
     const [data] = await Promise.all([
-      download(`/BookReader/Books/${itemId}/File`),
-      loadScript(asset('lib/jszip.min.js')),
-      loadScript(asset('lib/epub.min.js')),
+      loadBookFile(),
+      loadScript(asset('lib/jszip.min.js')).then(() => loadScript(asset('lib/epub.min.js'))),
     ]);
     this.book = window.ePub(data);
     await this.book.ready;
@@ -360,7 +359,7 @@ class PdfEngine {
     this.doc = await pdfjs.getDocument({
       url: `${location.origin}${API}/BookReader/Books/${itemId}/File`,
       httpHeaders: { Authorization: AUTH },
-      rangeChunkSize: 256 * 1024,
+      rangeChunkSize: 512 * 1024,
       // Only fetch the parts of the file needed for the pages being viewed.
       // (With streaming on, pdf.js also downloads the whole file in the background,
       // which competes with the first page on slower connections.)
@@ -371,13 +370,14 @@ class PdfEngine {
 
     this.count = this.doc.numPages;
     this.page = clamp(parseInt(saved?.location, 10) || 1, 1, this.count);
-    const first = await this.doc.getPage(1);
+    const first = await this.doc.getPage(this.page);
     const vp = first.getViewport({ scale: 1 });
     this.aspect = vp.height / vp.width;
     this.cache = new Map();
 
-    this.loadOutline();
     this.render();
+    // The contents list is read after the first page is up, so it never delays it.
+    setTimeout(() => this.loadOutline(), 1200);
   }
 
   async loadOutline() {
@@ -391,12 +391,26 @@ class PdfEngine {
       }
     };
     walk(outline, 0);
+    this.outlineAll = flat;
+    buildToc(flat.map((f) => ({
+      label: f.label,
+      level: f.level,
+      go: async () => { const n = f.page ?? await this.destToPage(f.dest); if (n) this.goTo(n); },
+    })));
+
+    // Finding the page each heading starts on can mean reading most of the file,
+    // so it's only done up front for smaller PDFs. In big ones a heading's page is
+    // looked up when it's tapped, and chapter marks are left off the progress bar.
+    const { length } = await this.doc.getDownloadInfo().catch(() => ({ length: Infinity }));
+    if (length > 15e6) return;
     const pages = await Promise.all(flat.map((f) => this.destToPage(f.dest)));
-    this.outline = flat.map((f, i) => ({ ...f, page: pages[i] })).filter((f) => f.page);
-    buildToc(this.outline.map((f) => ({ label: f.label, level: f.level, go: () => this.goTo(f.page) })));
+    flat.forEach((f, i) => { f.page = pages[i]; });
+    this.outline = flat.filter((f) => f.page);
     setTicks(this.outline.filter((f) => f.level === 0 && f.page > 1).map((f) => (f.page - 1) / Math.max(1, this.count - 1)));
     this.report();
   }
+
+  tocIndex(entry) { return this.outlineAll ? this.outlineAll.indexOf(entry) : -1; }
 
   async destToPage(dest) {
     try {
@@ -560,7 +574,7 @@ class PdfEngine {
   report() {
     const chapter = this.outline ? [...this.outline].reverse().find((o) => o.page <= this.page) : null;
     $('chapter-title').textContent = chapter?.label || '';
-    if (this.outline) markTocCurrent(chapter ? this.outline.indexOf(chapter) : -1);
+    if (this.outline) markTocCurrent(chapter ? this.tocIndex(chapter) : -1);
     updatePosition((this.page - 1) / Math.max(1, this.count - 1), `Page ${this.page} of ${this.count}`, String(this.page));
   }
 
@@ -1070,6 +1084,78 @@ function toast(text) {
 // ------------------------------------------------------------------
 // Utilities
 // ------------------------------------------------------------------
+/**
+ * The book file, from this device's copy when it has an up-to-date one.
+ * Reopening a book you're reading is then instant, even on a slow connection.
+ */
+async function loadBookFile() {
+  const version = state.info?.fileVersion;
+  const kept = version ? await BookStore.get(itemId, version) : null;
+  if (kept) return kept;
+  const data = await download(`/BookReader/Books/${itemId}/File`);
+  if (version) BookStore.put(itemId, version, data);
+  return data;
+}
+
+/** Keeps the last few books opened on this device (IndexedDB works on plain http too). */
+const BookStore = {
+  keep: 8,
+  maxBytes: 80e6,
+  db: null,
+  open() {
+    if (!this.db) {
+      this.db = new Promise((resolve, reject) => {
+        const r = indexedDB.open('bookreader', 1);
+        r.onupgradeneeded = () => { r.result.createObjectStore('files'); r.result.createObjectStore('meta'); };
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    }
+    return this.db;
+  },
+  async get(id, version) {
+    try {
+      const db = await this.open();
+      return await new Promise((resolve) => {
+        const tx = db.transaction(['files', 'meta'], 'readwrite');
+        const req = tx.objectStore('files').get(id);
+        req.onsuccess = () => {
+          const rec = req.result;
+          if (rec && rec.version === version) {
+            tx.objectStore('meta').put({ used: Date.now() }, id);
+            resolve(rec.data);
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      });
+    } catch {
+      return null;
+    }
+  },
+  async put(id, version, data) {
+    if (data.byteLength > this.maxBytes) return;
+    try {
+      const db = await this.open();
+      const tx = db.transaction(['files', 'meta'], 'readwrite');
+      tx.objectStore('files').put({ version, data }, id);
+      tx.objectStore('meta').put({ used: Date.now() }, id);
+      // Drop the least recently opened books beyond the limit.
+      const seen = [];
+      tx.objectStore('meta').openCursor().onsuccess = (e) => {
+        const c = e.target.result;
+        if (c) { seen.push([c.key, c.value.used || 0]); c.continue(); return; }
+        seen.sort((a, b) => b[1] - a[1]);
+        for (const [key] of seen.slice(this.keep)) {
+          tx.objectStore('files').delete(key);
+          tx.objectStore('meta').delete(key);
+        }
+      };
+    } catch { /* storage full or blocked: just don't keep it */ }
+  },
+};
+
 async function download(path) {
   const res = await api(path);
   if (res.status === 409) throw new ReaderError('This book is still being prepared. Try again in a moment.');

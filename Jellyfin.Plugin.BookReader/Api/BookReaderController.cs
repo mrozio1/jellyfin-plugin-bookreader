@@ -242,7 +242,7 @@ public partial class BookReaderController : ControllerBase
 
     /// <summary>
     /// One comic page. Pass w (the width in device pixels the page will be shown at)
-    /// to get a smaller WebP version sized for the screen.
+    /// to get a smaller version sized for the screen.
     /// </summary>
     [HttpGet("Books/{itemId}/Pages/{index:int}")]
     [Authorize]
@@ -273,9 +273,12 @@ public partial class BookReaderController : ControllerBase
             if (PageImageService.SnapWidth(w) is int width)
             {
                 var resized = await _pageImages.GetAsync(book, index, width, ct).ConfigureAwait(false);
+
+                // Then start on the next pages, so they're ready before the reader asks.
+                _pageImages.PrepareAhead(book, index + 1, Math.Clamp(Plugin.Instance!.Configuration.PrefetchPages * 2, 2, 12), width);
                 if (resized is not null)
                 {
-                    return PhysicalFile(resized, "image/webp");
+                    return PhysicalFile(resized, "image/jpeg");
                 }
             }
 
@@ -457,9 +460,17 @@ public partial class BookReaderController : ControllerBase
             series = (item as Book)?.SeriesName,
             format = Path.GetExtension(item.Path).TrimStart('.').ToLowerInvariant(),
             kind = kind.ToString().ToLowerInvariant(),
+            fileVersion = FileVersion(item.Path),
             pageCount,
             conversion
         };
+    }
+
+    /// <summary>Changes whenever the file on disk changes; lets devices keep their own copy.</summary>
+    private static string FileVersion(string path)
+    {
+        var info = new FileInfo(path);
+        return info.Length.ToString("x") + "-" + info.LastWriteTimeUtc.Ticks.ToString("x");
     }
 
     private bool TryGetUserId(out Guid userId)
